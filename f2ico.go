@@ -47,7 +47,7 @@ var apkDensityWeight = map[string]int8{
 func F2ICO(w io.Writer, path string, cfg ...Config) error {
 	ext := strings.ToLower(filepath.Ext(path))[1:]
 	switch ext {
-	case "exe", "dll", "scr", "icl":
+	case "exe", "dll":
 		return PE2ICO(w, path, cfg...)
 	}
 
@@ -157,7 +157,7 @@ func GetInfo(path string) (info Info, err error) {
 		 */
 		info.IconFile = filepath.Join(path, "Contents/Resources/AppIcon.icns")
 		return
-	case "exe", "dll", "scr", "icl", "ico", "bmp", "gif", "jpg", "jpeg", "png", "tiff", "icns", "dmg", "apk":
+	case "exe", "dll", "ico", "bmp", "gif", "jpg", "jpeg", "png", "tiff", "icns", "dmg", "apk":
 		// 尝试把iconfile设置为自己
 		info.IconFile = path
 		return
@@ -411,6 +411,29 @@ type ICOFILEHEADER struct {
 	Entries []ICONDIRENTRY
 }
 
+func DefaultICO(w io.Writer, peFile *pe.File) error {
+	// 如果没有资源段
+	var subsystem uint16
+	switch peFile.OptionalHeader.(type) {
+	case *pe.OptionalHeader32:
+		subsystem = peFile.OptionalHeader.(*pe.OptionalHeader32).Subsystem
+	case *pe.OptionalHeader64:
+		subsystem = peFile.OptionalHeader.(*pe.OptionalHeader64).Subsystem
+	}
+
+	n := ""
+	switch subsystem {
+	case pe.IMAGE_SUBSYSTEM_WINDOWS_CUI, pe.IMAGE_SUBSYSTEM_OS2_CUI, pe.IMAGE_SUBSYSTEM_POSIX_CUI:
+		n = "assets/CUI.ico"
+	default: // pe.IMAGE_SUBSYSTEM_WINDOWS_GUI, pe.IMAGE_SUBSYSTEM_WINDOWS_CE_GUI
+		n = "assets/GUI.ico"
+	}
+
+	d, _ := Asset(n)
+	_, err := w.Write(d)
+	return err
+}
+
 /*
 在 Windows 中，当匹配一个 EXE 文件的图标时，通常会选择其中的一个资源，这个资源通常是包含在 PE 文件中的一组图标资源中的一个。选择的资源不一定是具有最小 ID 的资源，而是根据一些规则进行选择。
 Choosing an Icon: https://learn.microsoft.com/en-us/previous-versions/ms997538(v=msdn.10)?redirectedfrom=MSDN#choosing-an-icon
@@ -425,23 +448,7 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 
 	rsrc := peFile.Section(SECTION_RESOURCES)
 	if rsrc == nil {
-		var subsystem uint16
-		switch peFile.OptionalHeader.(type) {
-		case *pe.OptionalHeader32:
-			subsystem = peFile.OptionalHeader.(*pe.OptionalHeader32).Subsystem
-		case *pe.OptionalHeader64:
-			subsystem = peFile.OptionalHeader.(*pe.OptionalHeader64).Subsystem
-		}
-		n := ""
-		switch subsystem {
-		case pe.IMAGE_SUBSYSTEM_WINDOWS_CUI:
-			n = "assets/CUI.ico"
-		case pe.IMAGE_SUBSYSTEM_WINDOWS_GUI:
-			n = "assets/GUI.ico"
-		}
-		d, _ := Asset(n)
-		_, err = w.Write(d)
-		return err
+		return DefaultICO(w, peFile)
 	}
 
 	// 解析资源表
@@ -453,33 +460,40 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 	resources := parseDir(resTable, 0, "", rsrc.SectionHeader.VirtualAddress)
 	idmap := make(map[uint16]*Resource)
 	gid := GRPICONDIR{}
+	var grpIcons []*Resource
 	for _, r := range resources {
 		if strings.HasPrefix(r.Name, RT_GROUP_ICON) {
-			rd := bytes.NewReader(r.Data)
-			binary.Read(rd, binary.LittleEndian, &gid.ICONDIR)
-			gid.Entries = make([]RESDIR, gid.Count)
-			for i := uint16(0); i < gid.Count; i++ {
-				binary.Read(rd, binary.LittleEndian, &gid.Entries[i])
-			}
-			break
-		}
-	}
-	for _, r := range resources {
-		// FIXME：如果只需要其中的一种尺寸
-		if strings.HasPrefix(r.Name, RT_ICON) {
+			grpIcons = append(grpIcons, r)
+		} else if strings.HasPrefix(r.Name, RT_ICON) {
+			// FIXME：如果只需要其中的一种尺寸
 			n := strings.Split(r.Name, "/")
 			id, _ := strconv.ParseUint(n[1], 10, 64)
 			idmap[uint16(id)] = r
 		}
 	}
 
-	if gid.Count <= 0 {
-		d, err := Asset("assets/GUI.ico")
-		if err != nil {
-			return err
+	// 如果没有图标，有资源段说明是GUI
+	if len(grpIcons) <= 0 {
+		return DefaultICO(w, peFile)
+	}
+
+	// 获取指定的图标
+	if len(cfg) > 0 && cfg[0].Index > 0 {
+		if int(cfg[0].Index) >= len(grpIcons) {
+			cfg[0].Index = 0
 		}
-		_, err = w.Write(d)
-		return err
+		r := grpIcons[cfg[0].Index]
+		rd := bytes.NewReader(r.Data)
+		binary.Read(rd, binary.LittleEndian, &gid.ICONDIR)
+		gid.Entries = make([]RESDIR, gid.Count)
+		for i := uint16(0); i < gid.Count; i++ {
+			binary.Read(rd, binary.LittleEndian, &gid.Entries[i])
+		}
+	}
+
+	// 如果没有图标，有资源段说明是GUI
+	if gid.Count <= 0 {
+		return DefaultICO(w, peFile)
 	}
 
 	// FIXME：如果输出PNG
