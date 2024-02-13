@@ -80,38 +80,35 @@ func F2ICO(w io.Writer, path string, cfg ...Config) error {
 		}
 		defer r.Close()
 
-		switch ext {
-		case "apk":
-			/*
-				APK 文件实际上是一个 ZIP 压缩文件，其中包含了应用程序的各种资源和文件。应用程序的图标通常存放在以下路径：
+		/*
+			APK 文件实际上是一个 ZIP 压缩文件，其中包含了应用程序的各种资源和文件。应用程序的图标通常存放在以下路径：
 
-				res/mipmap-<density>(-...)/ic_launcher.png
-				在这个路径中，<density> 是密度相关的标识符，代表了不同分辨率的图标。常见的标识符包括 hdpi、xhdpi、xxhdpi 等。不同密度的图标可以提供给不同密度的屏幕使用，以保证图标在不同设备上显示时具有良好的清晰度和质量。
+			res/mipmap-<density>(-...)/ic_launcher.png
+			在这个路径中，<density> 是密度相关的标识符，代表了不同分辨率的图标。常见的标识符包括 hdpi、xhdpi、xxhdpi 等。不同密度的图标可以提供给不同密度的屏幕使用，以保证图标在不同设备上显示时具有良好的清晰度和质量。
 
-				注意：实际的路径可能会因应用程序的结构而有所不同，上述路径仅为一般情况。
-			*/
-			var maxWeight int8
-			var maxF *zip.File
-			for _, f := range r.File {
-				// 检查文件名
-				if match := apkRegex.FindStringSubmatch(f.Name); match != nil {
-					// 提取density信息
-					if apkDensityWeight[match[1]] > maxWeight {
-						maxF = f
-						maxWeight = apkDensityWeight[match[1]]
-					}
+			注意：实际的路径可能会因应用程序的结构而有所不同，上述路径仅为一般情况。
+		*/
+		var maxWeight int8
+		var maxF *zip.File
+		for _, f := range r.File {
+			// 检查文件名
+			if match := apkRegex.FindStringSubmatch(f.Name); match != nil {
+				// 提取density信息
+				if apkDensityWeight[match[1]] > maxWeight {
+					maxF = f
+					maxWeight = apkDensityWeight[match[1]]
 				}
 			}
-			if maxF != nil {
-				// 打开文件
-				rc, err := maxF.Open()
-				if err != nil {
-					return err
-				}
-				defer rc.Close()
-
-				return IMG2ICO(w, rc, cfg...)
+		}
+		if maxF != nil {
+			// 打开文件
+			rc, err := maxF.Open()
+			if err != nil {
+				return err
 			}
+			defer rc.Close()
+
+			return IMG2ICO(w, rc, cfg...)
 		}
 	}
 

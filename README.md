@@ -16,6 +16,8 @@
 - [ ] 指定尺寸图标匹配逻辑
 - [ ] dll加载不到图标问题
 
+### 如果要更新assets下的默认图标
+
 #### 安装 go-bindata 工具：
 > go install -u github.com/go-bindata/go-bindata/...
 
