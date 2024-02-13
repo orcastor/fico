@@ -32,9 +32,9 @@ import (
 
 type Config struct {
 	Format string // png or ico(default)
-	Width  uint16 // 0 for all
-	Height uint16 // 0 for all
-	Index  uint16 // 0 default
+	Width  int    // 0 for all
+	Height int    // 0 for all
+	Index  int    // 0 default
 }
 
 var apkRegex = regexp.MustCompile(`^res/mipmap-((:?x{0,3}h)|[ml])dpi[^\/]*/.*\.png$`)
