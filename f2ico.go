@@ -294,8 +294,9 @@ func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 }
 
 const (
-	RT_ICON       = 3
-	RT_GROUP_ICON = 14
+	SECTION_RESOURCES = ".rsrc"
+	RT_ICON           = "3/"
+	RT_GROUP_ICON     = "14/"
 )
 
 // Resource holds the full name and data of a data entry in a resource directory structure.
@@ -311,6 +312,10 @@ type Resource struct {
 // building on path prefix. virtual is needed to calculate the position of the data
 // in the resource
 func parseDir(b []byte, p int, prefix string, virtual uint32) []*Resource {
+	if prefix != "" && !strings.HasPrefix(prefix, RT_GROUP_ICON) && !strings.HasPrefix(prefix, RT_ICON) {
+		return nil
+	}
+
 	var resources []*Resource
 
 	// Skip Characteristics, Timestamp, Major, Minor in the directory
@@ -326,17 +331,17 @@ func parseDir(b []byte, p int, prefix string, virtual uint32) []*Resource {
 		offsetToData := int(binary.LittleEndian.Uint32(b[o+4 : o+8]))
 		path := prefix
 		if name&0x80000000 > 0 { // Named entry if the high bit is set in the name
-			dirString := name & (0x80000000 - 1)
+			dirString := name & 0x7FFFFFFF
 			length := int(binary.LittleEndian.Uint16(b[dirString : dirString+2]))
-			b = b[dirString+2 : dirString+2+length*2]
+			c := b[dirString+2 : dirString+2+length*2]
 			var r []uint16
 			for {
-				if len(b) < 2 {
+				if len(c) < 2 {
 					break
 				}
-				v := binary.LittleEndian.Uint16(b[0:2])
+				v := binary.LittleEndian.Uint16(c[0:2])
 				r = append(r, v)
-				b = b[2:]
+				c = c[2:]
 			}
 			path += string(utf16.Decode(r))
 		} else { // ID entry
@@ -344,7 +349,7 @@ func parseDir(b []byte, p int, prefix string, virtual uint32) []*Resource {
 		}
 
 		if offsetToData&0x80000000 > 0 { // Ptr to other directory if high bit is set
-			subdir := offsetToData & (0x80000000 - 1)
+			subdir := offsetToData & 0x7FFFFFFF
 
 			// Recursively get the resources from the sub dirs
 			l := parseDir(b, subdir, path+"/", virtual)
@@ -418,9 +423,25 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 		return err
 	}
 
-	rsrc := peFile.Section(".rsrc")
+	rsrc := peFile.Section(SECTION_RESOURCES)
 	if rsrc == nil {
-		return errors.New("not Windows GUI executable, there's no icon resource")
+		var subsystem uint16
+		switch peFile.OptionalHeader.(type) {
+		case *pe.OptionalHeader32:
+			subsystem = peFile.OptionalHeader.(*pe.OptionalHeader32).Subsystem
+		case *pe.OptionalHeader64:
+			subsystem = peFile.OptionalHeader.(*pe.OptionalHeader64).Subsystem
+		}
+		n := ""
+		switch subsystem {
+		case pe.IMAGE_SUBSYSTEM_WINDOWS_CUI:
+			n = "assets/CUI.ico"
+		case pe.IMAGE_SUBSYSTEM_WINDOWS_GUI:
+			n = "assets/GUI.ico"
+		}
+		d, _ := Asset(n)
+		_, err = w.Write(d)
+		return err
 	}
 
 	// 解析资源表
@@ -433,20 +454,32 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 	idmap := make(map[uint16]*Resource)
 	gid := GRPICONDIR{}
 	for _, r := range resources {
-		if strings.HasPrefix(r.Name, "14/") {
+		if strings.HasPrefix(r.Name, RT_GROUP_ICON) {
 			rd := bytes.NewReader(r.Data)
 			binary.Read(rd, binary.LittleEndian, &gid.ICONDIR)
 			gid.Entries = make([]RESDIR, gid.Count)
 			for i := uint16(0); i < gid.Count; i++ {
 				binary.Read(rd, binary.LittleEndian, &gid.Entries[i])
 			}
+			break
 		}
+	}
+	for _, r := range resources {
 		// FIXME：如果只需要其中的一种尺寸
-		if strings.HasPrefix(r.Name, "3/") {
+		if strings.HasPrefix(r.Name, RT_ICON) {
 			n := strings.Split(r.Name, "/")
 			id, _ := strconv.ParseUint(n[1], 10, 64)
 			idmap[uint16(id)] = r
 		}
+	}
+
+	if gid.Count <= 0 {
+		d, err := Asset("assets/GUI.ico")
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(d)
+		return err
 	}
 
 	// FIXME：如果输出PNG
