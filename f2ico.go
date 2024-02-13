@@ -270,7 +270,8 @@ func IMG2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 	return err
 }
 
-func ICNSBRLDecode(data []byte) (ret []byte) {
+// https://github.com/nyteshade/ByteRunLengthCoder/blob/main/ByteRunLengthCoder.swift
+func icnsBRLDecode(data []byte) (ret []byte) {
 	for i := 0; i < len(data); {
 		b := data[i]
 		if b < 0x80 {
@@ -358,9 +359,9 @@ func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 				if maskData, ok := maskMap[i]; ok {
 					// 构造成ARGB格式
 					newData := append([]byte("ARGB"), maskData.Data...)
-					icon.Data = append(newData, ICNSBRLDecode(icon.Data)...)
+					icon.Data = append(newData, icnsBRLDecode(icon.Data)...)
 				} else {
-					icon.Data = append([]byte("ARGB"), ICNSBRLDecode(icon.Data)...)
+					icon.Data = append([]byte("ARGB"), icnsBRLDecode(icon.Data)...)
 					// 说明有没有透明度数据
 					hasAlphaChan = 0
 				}
@@ -370,7 +371,7 @@ func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 
 			if isARGB(icon.Data) {
 				if needDecode {
-					icon.Data = ICNSBRLDecode(icon.Data[4:])
+					icon.Data = icnsBRLDecode(icon.Data[4:])
 				} else {
 					icon.Data = icon.Data[4:]
 				}
