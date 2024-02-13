@@ -10,18 +10,32 @@ import (
 	"image/draw"
 	"image/png"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf16"
+
+	"gopkg.in/ini.v1"
+
+	_ "image/gif"
+	_ "image/jpeg"
+
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/tiff"
 )
+
+type Config struct {
+	Format string // png or ico(default)
+	Width  uint16 // 0 for all
+	Height uint16 // 0 for all
+	Index  uint16 // 0 default
+}
 
 var apkRegex = regexp.MustCompile(`^res/mipmap-((:?x{0,3}h)|[ml])dpi[^\/]*/.*\.png$`)
 
-var densityWeight = map[string]int8{
+var apkDensityWeight = map[string]int8{
 	"xxxh": 6,
 	"xxh":  5,
 	"xh":   4,
@@ -30,120 +44,129 @@ var densityWeight = map[string]int8{
 	"l":    1,
 }
 
-func F2ICO(w io.Writer, path string) error {
+func F2ICO(w io.Writer, path string, cfg ...Config) error {
 	ext := strings.ToLower(filepath.Ext(path))[1:]
 	switch ext {
-	// 文件
-	// *.dmg、*.exe、*.apk
-	case "ico":
+	case "exe", "dll", "scr", "icl":
+		return PE2ICO(w, path, cfg...)
+	}
+
+	switch ext {
+	case "ico", "icns", "bmp", "gif", "jpg", "jpeg", "png", "tiff":
 		f, err := os.Open(path)
 		if err != nil {
 			return err
 		}
 		defer f.Close()
 
-		_, err = io.Copy(w, f)
-		return err
-	case "png":
-		f, err := os.Open(path)
-		if err != nil {
+		switch ext {
+		case "ico": // FIXME：如果只需要其中的一种尺寸
+			_, err = io.Copy(w, f)
 			return err
-		}
-		defer f.Close()
-
-		// 解码PNG图片
-		img, _, err := image.Decode(f)
-		if err != nil {
-			log.Fatal(err)
+		case "icns":
+			return ICNS2ICO(w, f, cfg...)
+		case "bmp", "gif", "jpg", "jpeg", "png", "tiff":
+			return IMG2ICO(w, f, cfg...)
 		}
 
-		rgba := image.NewRGBA(img.Bounds())
-		draw.Draw(rgba, rgba.Bounds(), img, image.Point{0, 0}, draw.Src)
-		return PNG2ICO(w, rgba)
-	case "icns":
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-
-		return ICNS2ICO(w, f)
-	case "dmg":
-		/*
-			在 macOS 的 DMG（Disk Image）文件中，图标文件通常存放在.VolumeIcon.icns 文件中。
-
-			.VolumeIcon.icns 文件：.VolumeIcon.icns 文件是存储在 DMG 文件中的磁盘图标文件。您可以通过创建一个包含所需图标的 .icns 文件，并将其命名为 .VolumeIcon.icns，然后将其添加到 DMG 文件中。这样，当用户挂载 DMG 文件时，磁盘会显示指定的图标。
-		*/
+	case "dmg", "apk":
 		r, err := zip.OpenReader(path)
 		if err != nil {
 			return err
 		}
 		defer r.Close()
 
-		// 遍历zip文件中的文件
-		for _, f := range r.File {
-			// 检查文件名是否是.VolumeIcon.icns
-			if strings.HasSuffix(f.Name, ".VolumeIcon.icns") {
+		switch ext {
+		case "dmg":
+			/*
+				在 macOS 的 DMG（Disk Image）文件中，图标文件通常存放在.VolumeIcon.icns 文件中。
+
+				.VolumeIcon.icns 文件：.VolumeIcon.icns 文件是存储在 DMG 文件中的磁盘图标文件。您可以通过创建一个包含所需图标的 .icns 文件，并将其命名为 .VolumeIcon.icns，然后将其添加到 DMG 文件中。这样，当用户挂载 DMG 文件时，磁盘会显示指定的图标。
+			*/
+			for _, f := range r.File {
+				// 检查文件名是否是.VolumeIcon.icns
+				if strings.HasSuffix(f.Name, ".VolumeIcon.icns") {
+					// 打开文件
+					rc, err := f.Open()
+					if err != nil {
+						return err
+					}
+					defer rc.Close()
+
+					return ICNS2ICO(w, rc, cfg...)
+				}
+			}
+		case "apk":
+			/*
+				APK 文件实际上是一个 ZIP 压缩文件，其中包含了应用程序的各种资源和文件。应用程序的图标通常存放在以下路径：
+
+				res/mipmap-<density>(-...)/ic_launcher.png
+				在这个路径中，<density> 是密度相关的标识符，代表了不同分辨率的图标。常见的标识符包括 hdpi、xhdpi、xxhdpi 等。不同密度的图标可以提供给不同密度的屏幕使用，以保证图标在不同设备上显示时具有良好的清晰度和质量。
+
+				注意：实际的路径可能会因应用程序的结构而有所不同，上述路径仅为一般情况。
+			*/
+			var maxWeight int8
+			var maxF *zip.File
+			for _, f := range r.File {
+				// 检查文件名
+				if match := apkRegex.FindStringSubmatch(f.Name); match != nil {
+					// 提取density信息
+					if apkDensityWeight[match[1]] > maxWeight {
+						maxF = f
+						maxWeight = apkDensityWeight[match[1]]
+					}
+				}
+			}
+			if maxF != nil {
 				// 打开文件
-				rc, err := f.Open()
+				rc, err := maxF.Open()
 				if err != nil {
 					return err
 				}
 				defer rc.Close()
 
-				return ICNS2ICO(w, rc)
+				return IMG2ICO(w, rc, cfg...)
 			}
 		}
-	case "apk":
-		/*
-			APK 文件实际上是一个 ZIP 压缩文件，其中包含了应用程序的各种资源和文件。应用程序的图标通常存放在以下路径：
+	}
 
-			res/mipmap-<density>(-...)/ic_launcher.png
-			在这个路径中，<density> 是密度相关的标识符，代表了不同分辨率的图标。常见的标识符包括 hdpi、xhdpi、xxhdpi 等。不同密度的图标可以提供给不同密度的屏幕使用，以保证图标在不同设备上显示时具有良好的清晰度和质量。
+	return errors.New("conversion failed")
+}
 
-			注意：实际的路径可能会因应用程序的结构而有所不同，上述路径仅为一般情况。
-		*/
-		r, err := zip.OpenReader(path)
+type Info struct {
+	IconFile  string
+	IconIndex uint16
+	FilePath  string
+}
+
+func GetInfo(path string) (info Info, err error) {
+	ext := strings.ToLower(filepath.Ext(path))[1:]
+
+	var f *ini.File
+	switch ext {
+	case "inf", "ini", "desktop":
+		f, err = ini.Load(path)
 		if err != nil {
-			return err
+			return info, err
 		}
-		defer r.Close()
 
-		var maxWeight int8
-		var maxF *zip.File
-		// 遍历zip文件中的文件
-		for _, f := range r.File {
-			// 检查文件名
-			if match := apkRegex.FindStringSubmatch(f.Name); match != nil {
-				// 提取density信息
-				density := match[1]
-				if densityWeight[density] > maxWeight {
-					maxF = f
-					maxWeight = densityWeight[density]
-				}
-			}
-		}
-		if maxF != nil {
-			// 打开文件
-			rc, err := maxF.Open()
-			if err != nil {
-				return err
-			}
-			defer rc.Close()
+	// *.app目录
+	case "app":
+		/*
+		*.app/Contents/Resources/AppIcon.icns
+		 */
+		info.IconFile = filepath.Join(path, "Contents/Resources/AppIcon.icns")
+		return
+	case "exe", "dll", "scr", "icl", "ico", "bmp", "gif", "jpg", "jpeg", "png", "tiff", "icns", "dmg", "apk":
+		// 尝试把iconfile设置为自己
+		info.IconFile = path
+		return
+	default:
+		// 不支持的格式，返回空
+		return
+	}
 
-			// 解码PNG图片
-			img, _, err := image.Decode(rc)
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			rgba := image.NewRGBA(img.Bounds())
-			draw.Draw(rgba, rgba.Bounds(), img, image.Point{0, 0}, draw.Src)
-			return PNG2ICO(w, rgba)
-		}
-	case "exe", "dll", "scr", "icl":
-		return PE2ICO(w, path, 0)
-
+	switch ext {
 	// 配置文件
 	// autorun.inf、desktop.ini、*.desktop(*.AppImage/*.run)
 	case "inf":
@@ -174,6 +197,12 @@ func F2ICO(w io.Writer, path string) error {
 
 			完成后，将 autorun.inf 文件与您的可移动媒体（如 CD、DVD 或 USB 驱动器）一起放置，并在 Windows 系统中插入该媒体，系统会根据 autorun.inf 文件中的设置自动运行，并显示所指定的图标。
 		*/
+		section, err := f.GetSection("AutoRun")
+		if err != nil {
+			return info, err
+		}
+
+		info.IconFile = section.Key("IconFile").MustString(section.Key("DefaultIcon").String())
 	case "ini":
 		/*
 			在 Windows 操作系统中，desktop.ini 文件用于自定义文件夹的外观和行为。您可以在文件夹中创建 desktop.ini 文件，并在其中指定如何显示该文件夹的图标。
@@ -188,7 +217,14 @@ func F2ICO(w io.Writer, path string) error {
 			IconIndex 字段指定要在 IconFile 中使用的图标的索引。如果 IconFile 是 .ico 文件，则索引从0开始，表示图标在文件中的位置。如果 IconFile 是 .exe 或 .dll 文件，则索引表示图标资源的标识符。
 			完成后，您可以将 desktop.ini 文件放置在所需文件夹中，并在 Windows 资源管理器中刷新文件夹，以查看所指定的图标。
 		*/
-	case "AppImage", "run":
+		section, err := f.GetSection(".ShellClassInfo")
+		if err != nil {
+			return info, err
+		}
+
+		info.IconFile = section.Key("IconFile").String()
+		info.IconIndex = uint16(section.Key("IconFile").MustUint(0))
+	case "desktop":
 		/*
 			创建包含图标和其他资源的 .desktop 文件来为 .AppImage/.run 文件指定图标。然后，您可以将 .AppImage/.run 文件与 .desktop 文件一起分发，并通过 .desktop 文件来启动 .AppImage/.run 文件，并在系统中显示指定的图标。
 
@@ -204,46 +240,55 @@ func F2ICO(w io.Writer, path string) error {
 
 			您需要将 Icon 字段设置为指向您要在系统中显示的图标文件的路径，并将 Exec 字段设置为指向您的 .AppImage/.run 文件的路径。然后，您可以将 .desktop 文件放置在系统的应用程序启动器中，用户可以通过单击该图标来运行 .run 文件，并显示指定的图标。
 		*/
+		section, err := f.GetSection("Desktop Entry")
+		if err != nil {
+			return info, err
+		}
 
-	// 目录
-	// *.app
-	case "app":
-		/*
-		*.app/Contents/Resources/AppIcon.icns
-		 */
+		info.IconFile = section.Key("Icon").String()
+		info.FilePath = section.Key("Exec").String()
 	}
-
-	return nil
+	return
 }
 
-func PNG2ICO(w io.Writer, rgba *image.RGBA) error {
-	err := binary.Write(w, binary.LittleEndian, &ICONDIR{Type: 1, Count: 1})
+func IMG2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
+	img, _, err := image.Decode(r)
 	if err != nil {
 		return err
 	}
+
+	rgba := image.NewRGBA(img.Bounds())
+	draw.Draw(rgba, rgba.Bounds(), img, image.Point{0, 0}, draw.Src)
 
 	var buf bytes.Buffer
 	png.Encode(&buf, rgba)
 
-	err = binary.Write(w, binary.LittleEndian, &ICONDIRENTRY{
-		IconCommon: IconCommon{
-			Width:      uint8(rgba.Bounds().Dx()),
-			Height:     uint8(rgba.Bounds().Dy()),
-			Planes:     1,
-			BitCount:   32,
-			BytesInRes: uint32(buf.Len()),
-		},
-		Offset: 0x16,
-	})
-	if err != nil {
-		return err
+	if len(cfg) <= 0 || cfg[0].Format != "png" {
+		err = binary.Write(w, binary.LittleEndian, &ICONDIR{Type: 1, Count: 1})
+		if err != nil {
+			return err
+		}
+
+		err = binary.Write(w, binary.LittleEndian, &ICONDIRENTRY{
+			IconCommon: IconCommon{
+				Width:      uint8(rgba.Bounds().Dx()),
+				Height:     uint8(rgba.Bounds().Dy()),
+				Planes:     1,
+				BitCount:   32,
+				BytesInRes: uint32(buf.Len()),
+			},
+			Offset: 0x16,
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	_, err = w.Write(buf.Bytes())
 	return err
 }
 
-func ICNS2ICO(w io.Writer, f io.ReadCloser) error {
+func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 	// TODO
 	return nil
 }
@@ -363,15 +408,10 @@ type ICOFILEHEADER struct {
 
 /*
 在 Windows 中，当匹配一个 EXE 文件的图标时，通常会选择其中的一个资源，这个资源通常是包含在 PE 文件中的一组图标资源中的一个。选择的资源不一定是具有最小 ID 的资源，而是根据一些规则进行选择。
-具体来说，Windows 会根据以下几个因素来选择图标资源：
-图标大小：Windows 会根据显示图标的大小来选择最合适的资源。这意味着如果需要的是小尺寸图标，Windows 会选择包含小尺寸图标的资源。
-分辨率：如果图标资源包含不同分辨率的图标，Windows 会选择与显示器分辨率最匹配的图标。
-语言：Windows 还会考虑资源中的语言信息，优先选择与当前系统语言匹配的资源。
-图标类型：有时候 PE 文件中可能包含多个类型的图标资源，如 16x16 和 32x32 大小的图标，Windows 会根据需要选择适合的类型。
-综上所述，选择的图标资源并不一定是具有最小 ID 的资源，而是根据上述因素来决定的。因此，在制作 PE 文件时，确保包含了适合不同显示情况的图标资源是很重要的。
+Choosing an Icon: https://learn.microsoft.com/en-us/previous-versions/ms997538(v=msdn.10)?redirectedfrom=MSDN#choosing-an-icon
 */
 // 支持格式exe dll scr icl
-func PE2ICO(w io.Writer, path string, idx int) error {
+func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 	// 解析PE文件
 	peFile, err := pe.Open(path)
 	if err != nil {
@@ -401,6 +441,7 @@ func PE2ICO(w io.Writer, path string, idx int) error {
 				binary.Read(rd, binary.LittleEndian, &gid.Entries[i])
 			}
 		}
+		// FIXME：如果只需要其中的一种尺寸
 		if strings.HasPrefix(r.Name, "3/") {
 			n := strings.Split(r.Name, "/")
 			id, _ := strconv.ParseUint(n[1], 10, 64)
@@ -408,6 +449,7 @@ func PE2ICO(w io.Writer, path string, idx int) error {
 		}
 	}
 
+	// FIXME：如果输出PNG
 	err = binary.Write(w, binary.LittleEndian, gid.ICONDIR)
 	if err != nil {
 		return err
