@@ -7,9 +7,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"image"
+	"image/color"
 	"image/draw"
 	"image/png"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,6 +24,8 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 
+	_ "github.com/cbeer/jpeg2000"
+	"github.com/tmc/icns"
 	_ "golang.org/x/image/bmp"
 	_ "golang.org/x/image/tiff"
 )
@@ -69,7 +73,7 @@ func F2ICO(w io.Writer, path string, cfg ...Config) error {
 			return IMG2ICO(w, f, cfg...)
 		}
 
-	case "dmg", "apk":
+	case "apk":
 		r, err := zip.OpenReader(path)
 		if err != nil {
 			return err
@@ -77,25 +81,6 @@ func F2ICO(w io.Writer, path string, cfg ...Config) error {
 		defer r.Close()
 
 		switch ext {
-		case "dmg":
-			/*
-				在 macOS 的 DMG（Disk Image）文件中，图标文件通常存放在.VolumeIcon.icns 文件中。
-
-				.VolumeIcon.icns 文件：.VolumeIcon.icns 文件是存储在 DMG 文件中的磁盘图标文件。您可以通过创建一个包含所需图标的 .icns 文件，并将其命名为 .VolumeIcon.icns，然后将其添加到 DMG 文件中。这样，当用户挂载 DMG 文件时，磁盘会显示指定的图标。
-			*/
-			for _, f := range r.File {
-				// 检查文件名是否是.VolumeIcon.icns
-				if strings.HasSuffix(f.Name, ".VolumeIcon.icns") {
-					// 打开文件
-					rc, err := f.Open()
-					if err != nil {
-						return err
-					}
-					defer rc.Close()
-
-					return ICNS2ICO(w, rc, cfg...)
-				}
-			}
 		case "apk":
 			/*
 				APK 文件实际上是一个 ZIP 压缩文件，其中包含了应用程序的各种资源和文件。应用程序的图标通常存放在以下路径：
@@ -288,8 +273,183 @@ func IMG2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 	return err
 }
 
+func ICNSBRLDecode(data []byte) (ret []byte) {
+	for i := 0; i < len(data); {
+		b := data[i]
+		if b < 0x80 {
+			cnt := int(b) + 1
+			if i+cnt >= len(data) {
+				break
+			}
+			ret = append(ret, data[i+1:i+1+cnt]...)
+			i += cnt + 1
+		} else {
+			cnt := int(b) - 0x80 + 3
+			if i+1 >= len(data) {
+				break
+			}
+			tb := data[i+1]
+			s := make([]byte, cnt)
+			for i := range s {
+				s[i] = tb
+			}
+			ret = append(ret, s...)
+			i += 2
+		}
+	}
+	return
+}
+
+func isPNG(data []byte) bool {
+	return len(data) > 8 && bytes.Compare(data, []byte{'\x89', 'P', 'N', 'G', '\r', '\n', '\x1a', '\n'}) == 0
+}
+
+func isARGB(data []byte) bool {
+	return len(data) > 4 && string(data[:4]) == "ARGB"
+}
+
+// https://en.wikipedia.org/wiki/Apple_Icon_Image_format
 func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
-	// TODO
+	iconSet, err := icns.Parse(r)
+	if err != nil {
+		return err
+	}
+
+	// 掩码映射
+	maskMap := make(map[int]*icns.Icon)
+	var newSet icns.IconSet
+	// 过滤掉无用的OSType
+	for _, icon := range iconSet {
+		switch string(icon.Type[:]) {
+		case "TOC ", "icnV", "name", "info", "sbtp", "slct", "\xFD\xD9\x2F\xA8":
+			continue
+		case "s8mk", "l8mk", "h8mk", "t8mk":
+			maskMap[len(newSet)-1] = icon
+			break
+		default:
+			newSet = append(newSet, icon)
+		}
+	}
+
+	var data [][]byte
+	var entries []*ICONDIRENTRY
+	offset := 6 + len(newSet)*16
+	for i, icon := range newSet {
+		// it32 data always starts with a header of four zero-bytes
+		// (tested all icns files in macOS 10.15.7 and macOS 11).
+		// Usage unknown, the four zero-bytes can be any value and are quietly ignored.
+		if string(icon.Type[:]) == "it32" && len(icon.Data) >= 4 {
+			icon.Data = icon.Data[4:]
+		}
+
+		var w, h, s int
+
+		if isPNG(icon.Data) {
+			data = append(data, icon.Data)
+			img, err := png.DecodeConfig(bytes.NewReader(icon.Data))
+			if err != nil {
+				return err
+			}
+			w, h, s = img.Width, img.Height, len(icon.Data)
+		} else {
+			needDecode := true
+			hasAlphaChan := 1
+			var rgba *image.RGBA
+			switch string(icon.Type[:]) {
+			// 24-bit RGB
+			case "is32", "il32", "ih32", "it32", "icp4", "icp5":
+				if maskData, ok := maskMap[i]; ok {
+					// 构造成ARGB格式
+					newData := append([]byte("ARGB"), maskData.Data...)
+					icon.Data = append(newData, ICNSBRLDecode(icon.Data)...)
+				} else {
+					icon.Data = append([]byte("ARGB"), ICNSBRLDecode(icon.Data)...)
+					// 说明有没有透明度数据
+					hasAlphaChan = 0
+				}
+				needDecode = false
+			default:
+			}
+
+			if isARGB(icon.Data) {
+				if needDecode {
+					icon.Data = ICNSBRLDecode(icon.Data[4:])
+				} else {
+					icon.Data = icon.Data[4:]
+				}
+				pixles := len(icon.Data) / 4
+				w := int(math.Sqrt(float64(pixles)))
+				h = w
+
+				rgba = image.NewRGBA(image.Rect(0, 0, w, h))
+				for y := 0; y < h; y++ {
+					for x := 0; x < w; x++ {
+						no := (y*w + x)
+
+						var alpha uint8
+						if hasAlphaChan > 0 {
+							// 最前面是透明度数据
+							alpha = icon.Data[no]
+						} else {
+							alpha = 0xFF
+						}
+						rgba.Set(x, y, color.RGBA{
+							R: icon.Data[no+hasAlphaChan*pixles],
+							G: icon.Data[no+(1+hasAlphaChan)*pixles],
+							B: icon.Data[no+(2+hasAlphaChan)*pixles],
+							A: alpha,
+						})
+					}
+				}
+			} else {
+				img, _, err := image.Decode(bytes.NewReader(icon.Data))
+				if err != nil {
+					return err
+				}
+
+				rgba = image.NewRGBA(img.Bounds())
+				draw.Draw(rgba, rgba.Bounds(), img, image.Point{0, 0}, draw.Src)
+			}
+
+			var buf bytes.Buffer
+			png.Encode(&buf, rgba)
+			data = append(data, buf.Bytes())
+
+			w, h, s = rgba.Bounds().Dx(), rgba.Bounds().Dy(), buf.Len()
+		}
+
+		entries = append(entries, &ICONDIRENTRY{
+			IconCommon: IconCommon{
+				Width:      uint8(w),
+				Height:     uint8(h),
+				Planes:     1,
+				BitCount:   32,
+				BytesInRes: uint32(s),
+			},
+			Offset: uint32(offset),
+		})
+
+		offset += s
+	}
+
+	err = binary.Write(w, binary.LittleEndian, &ICONDIR{Type: 1, Count: uint16(len(iconSet))})
+	if err != nil {
+		return err
+	}
+
+	for i := 0; i < len(entries); i++ {
+		err = binary.Write(w, binary.LittleEndian, entries[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, d := range data {
+		_, err = w.Write(d)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

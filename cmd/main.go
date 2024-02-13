@@ -20,9 +20,12 @@ func main() {
 	// path := `C:\Users\Administrator\Downloads\imdb-movies-and-tv.apk`
 	// path := `C:\Windows\System32\cmd.exe`
 	// path := `C:\Windows\System32\alg.exe`
-	path := `D:\Program Files (x86)\Adobe Illustrator CS4\Support Files\Contents\Windows\Illustrator.exe`
-	err = f2ico.F2ICO(bufio.NewWriter(f), path, f2ico.Config{Index: 12})
+	// path := `D:\Program Files (x86)\Adobe Illustrator CS4\Support Files\Contents\Windows\Illustrator.exe`
+	path := `FileZilla.icns`
+	// path := `F:\安装包\android-studio-ide-401-201.6858069-mac.dmg`
+	// err = f2ico.F2ICO(bufio.NewWriter(f), path, f2ico.Config{Index: 12})
 	// err = f2ico.F2ICO(bufio.NewWriter(f), path, f2ico.Config{Format: "png"})
+	err = f2ico.F2ICO(bufio.NewWriter(f), path)
 	if err != nil {
 		panic(err)
 	}

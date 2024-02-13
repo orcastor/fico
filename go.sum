@@ -1,3 +1,9 @@
+github.com/cbeer/jpeg2000 v0.0.0-20200310160555-fbd1cc642f07 h1:oxPpywCeQNWNmQ90d771Xn0h41GT7LrmF7ukL/+tfC0=
+github.com/cbeer/jpeg2000 v0.0.0-20200310160555-fbd1cc642f07/go.mod h1:PCAwC5vRjmjzVA8HJEC/zCelJxrMzrxVY3PisVG1JIg=
+github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
+github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
+github.com/tmc/icns v0.0.0-20171229010138-5677fdfa7a3e h1:iyt6wo0K+mPcmB40zWhRXFoA6pGghZkGmjWB9cBKWbs=
+github.com/tmc/icns v0.0.0-20171229010138-5677fdfa7a3e/go.mod h1:NmWu0uOPJAHAUS7vpXngbcZMPzwgsaYvPSEs1gLpelg=
 golang.org/x/image v0.15.0 h1:kOELfmgrmJlw4Cdb7g/QGuB3CvDrXbqEIww/pNtNBm8=
 golang.org/x/image v0.15.0/go.mod h1:HUYqC05R2ZcZ3ejNQsIHQDQiwWM4JBqmm6MKANTp4LE=
 gopkg.in/ini.v1 v1.67.0 h1:Dgnx+6+nfE+IfzjUEISNeydPJh9AXNNsWbGP9KzCsOA=
