@@ -4,7 +4,7 @@
   </a>
 </p>
 
-<h1 align="center"><strong>🔬 f2ico</strong> <a href="https://github.com/orcastor/addon-previewer">@orcastor-previewer</a></h1>
+<h1 align="center"><strong>🔬 FileICOn</strong> <a href="https://github.com/orcastor/addon-previewer">@orcastor-previewer</a></h1>
 
 ### 支持文件
 
@@ -34,4 +34,4 @@
 > go install -u github.com/go-bindata/go-bindata/...
 
 #### 使用 go-bindata 将资源文件转换为 Go 代码：
-> go-bindata -o assets.go -pkg f2ico assets/...
+> go-bindata -o assets.go -pkg fico assets/...
