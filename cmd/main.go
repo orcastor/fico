@@ -29,7 +29,7 @@ func main() {
 	// path := `app.icns`
 	// path := `FileZilla.icns`
 	// path := `F:\安装包\android-studio-ide-401-201.6858069-mac.dmg`
-	err = f2ico.F2ICO(w, path, f2ico.Config{Index: 11})
+	err = f2ico.F2ICO(w, path, f2ico.Config{Index: 62})
 	// err = f2ico.F2ICO(w, path, f2ico.Config{Format: "png"})
 	// err = f2ico.F2ICO(w, path, f2ico.Config{Format: "png", Width: 48, Height: 48})
 	// err = f2ico.F2ICO(w, path)

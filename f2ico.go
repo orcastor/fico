@@ -6,7 +6,6 @@ import (
 	"debug/pe"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -552,21 +551,25 @@ type ICONDIRENTRY struct {
 }
 
 func defaultICO(w io.Writer, peFile *pe.File) error {
-	// 如果没有资源段
-	var subsystem uint16
-	switch peFile.OptionalHeader.(type) {
-	case *pe.OptionalHeader32:
-		subsystem = peFile.OptionalHeader.(*pe.OptionalHeader32).Subsystem
-	case *pe.OptionalHeader64:
-		subsystem = peFile.OptionalHeader.(*pe.OptionalHeader64).Subsystem
-	}
-
 	n := ""
-	switch subsystem {
-	case pe.IMAGE_SUBSYSTEM_WINDOWS_CUI, pe.IMAGE_SUBSYSTEM_OS2_CUI, pe.IMAGE_SUBSYSTEM_POSIX_CUI:
-		n = "assets/CUI.ico"
-	default: // pe.IMAGE_SUBSYSTEM_WINDOWS_GUI, pe.IMAGE_SUBSYSTEM_WINDOWS_CE_GUI
-		n = "assets/GUI.ico"
+	if peFile.FileHeader.Characteristics&pe.IMAGE_FILE_DLL > 0 {
+		n = "assets/DLL.ico"
+	} else {
+		// 如果没有资源段
+		var subsystem uint16
+		switch peFile.OptionalHeader.(type) {
+		case *pe.OptionalHeader32:
+			subsystem = peFile.OptionalHeader.(*pe.OptionalHeader32).Subsystem
+		case *pe.OptionalHeader64:
+			subsystem = peFile.OptionalHeader.(*pe.OptionalHeader64).Subsystem
+		}
+
+		switch subsystem {
+		case pe.IMAGE_SUBSYSTEM_WINDOWS_CUI, pe.IMAGE_SUBSYSTEM_OS2_CUI, pe.IMAGE_SUBSYSTEM_POSIX_CUI:
+			n = "assets/CUI.ico"
+		default: // pe.IMAGE_SUBSYSTEM_WINDOWS_GUI, pe.IMAGE_SUBSYSTEM_WINDOWS_CE_GUI
+			n = "assets/GUI.ico"
+		}
 	}
 
 	d, _ := Asset(n)
@@ -610,7 +613,7 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 		}
 	}
 
-	// 如果没有图标，有资源段说明是GUI
+	// 如果没有图标
 	if len(grpIcons) <= 0 {
 		return defaultICO(w, peFile)
 	}
@@ -629,7 +632,7 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 		}
 	}
 
-	// 如果没有图标，有资源段说明是GUI
+	// 如果没有图标
 	if gid.Count <= 0 {
 		return defaultICO(w, peFile)
 	}
@@ -644,7 +647,6 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 
 			offset += len(r.Data)
 			data = append(data, r.Data)
-			fmt.Printf("%#x\n", r.Data)
 		}
 	}
 
