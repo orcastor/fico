@@ -755,7 +755,7 @@ func zoomImg(srcImg image.Image, tW, tH int) *image.RGBA {
 
 	// 使用nearest-neighbor算法缩放图像
 	resizedImg := image.NewRGBA(image.Rect(0, 0, width, height))
-	draw.NearestNeighbor.Scale(resizedImg, resizedImg.Bounds(), srcImg, srcImg.Bounds(), draw.Over, nil)
+	draw.CatmullRom.Scale(resizedImg, resizedImg.Bounds(), srcImg, srcImg.Bounds(), draw.Over, nil)
 
 	// 将缩放后的图像绘制到目标图片上
 	img := image.NewRGBA(image.Rect(0, 0, tW, tH))
