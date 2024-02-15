@@ -1,4 +1,4 @@
-package f2ico
+package fico
 
 import (
 	"archive/zip"

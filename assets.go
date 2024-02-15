@@ -3,7 +3,7 @@
 // assets/CUI.ico
 // assets/DLL.ico
 // assets/GUI.ico
-package f2ico
+package fico
 
 import (
 	"bytes"

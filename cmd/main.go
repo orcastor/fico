@@ -4,11 +4,11 @@ import (
 	"bufio"
 	"os"
 
-	"github.com/orcastor/f2ico"
+	"github.com/orcastor/fico"
 )
 
 func main() {
-	f, err := os.OpenFile("f2ico_demo.ico", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
+	f, err := os.OpenFile("fico_demo.ico", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
 	if err != nil {
 		panic(err)
 	}
@@ -29,10 +29,10 @@ func main() {
 	// path := `app.icns`
 	// path := `FileZilla.icns`
 	// path := `F:\安装包\android-studio-ide-401-201.6858069-mac.dmg`
-	err = f2ico.F2ICO(w, path, f2ico.Config{Index: 62})
-	// err = f2ico.F2ICO(w, path, f2ico.Config{Format: "png"})
-	// err = f2ico.F2ICO(w, path, f2ico.Config{Format: "png", Width: 48, Height: 48})
-	// err = f2ico.F2ICO(w, path)
+	err = fico.fico(w, path, fico.Config{Index: 62})
+	// err = fico.fico(w, path, fico.Config{Format: "png"})
+	// err = fico.fico(w, path, fico.Config{Format: "png", Width: 48, Height: 48})
+	// err = fico.fico(w, path)
 	if err != nil {
 		panic(err)
 	}
