@@ -10,7 +10,7 @@
 
 - 图片（bmp、gif、jpg、jpeg、jp2、jpeg2000、png、tiff）
 - 图标（![](https://raw.githubusercontent.com/drag-and-publish/operating-system-logos/master/src/16x16/WIN.png)ico、![](https://raw.githubusercontent.com/drag-and-publish/operating-system-logos/master/src/16x16/MAC.png)icns）
-- ![](https://raw.githubusercontent.com/drag-and-publish/operating-system-logos/master/src/16x16/WIN.png)Windows可执行文件（exe、dll）
+- ![](https://raw.githubusercontent.com/drag-and-publish/operating-system-logos/master/src/16x16/WIN.png)Windows可执行文件（exe、dll、mui、mun）
 - ![](https://raw.githubusercontent.com/drag-and-publish/operating-system-logos/master/src/16x16/LIN.png)Linux可执行文件（\*.desktop【\*.AppImage、\*.run】）
 - ![](https://raw.githubusercontent.com/drag-and-publish/operating-system-logos/master/src/16x16/AND.png)apk包
 - ![](https://raw.githubusercontent.com/drag-and-publish/operating-system-logos/master/src/16x16/WIN.png)文件夹图标（autorun.inf、desktop.ini）
@@ -25,7 +25,8 @@
 - [x] 支持icns转换ico逻辑
 - [x] 指定尺寸缩放逻辑
 - [x] 指定尺寸图标匹配逻辑
-- [ ] dll加载不到图标问题
+- [x] dll加载不到图标问题
+  > 答: 在早期的 Windows 版本中，图标资源文件嵌入到目录中的某些 DLL 中C:\Windows\System32。自 Windows 10 版本 1903 起，它们已重新定位到： C:\Windows\SystemResources. 现在这些文件有一个新的扩展名，.mun而不是.mui （仍然存在于system32和syswow64子文件夹中。
 
 ### 如果要更新assets下的默认图标
 

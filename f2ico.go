@@ -6,6 +6,7 @@ import (
 	"debug/pe"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -34,7 +35,7 @@ type Config struct {
 	Format string // png or ico(default)
 	Width  int    // 0 for all
 	Height int    // 0 for all
-	Index  int    // 0 default, enabled for PE only
+	Index  int    // 0 default, negtive for all，enabled for PE only
 }
 
 var apkRegex = regexp.MustCompile(`^res/mipmap-((:?x{0,3}h)|[ml])dpi[^\/]*/.*\.png$`)
@@ -51,7 +52,8 @@ var apkDensityWeight = map[string]int8{
 func F2ICO(w io.Writer, path string, cfg ...Config) error {
 	ext := strings.ToLower(filepath.Ext(path))[1:]
 	switch ext {
-	case "exe", "dll":
+	// https://superuser.com/questions/1480268/icons-no-longer-in-imageres-dll-in-windows-10-1903-4kb-file
+	case "exe", "dll", "mui", "mun":
 		return PE2ICO(w, path, cfg...)
 	}
 
@@ -139,7 +141,7 @@ func GetInfo(path string) (info Info, err error) {
 		 */
 		info.IconFile = filepath.Join(path, "Contents/Resources/AppIcon.icns")
 		return
-	case "exe", "dll", "ico", "bmp", "gif", "jpg", "jpeg", "png", "tiff", "icns", "dmg", "apk":
+	case "exe", "dll", "mui", "mun", "ico", "bmp", "gif", "jpg", "jpeg", "png", "tiff", "icns", "dmg", "apk":
 		// 尝试把iconfile设置为自己
 		info.IconFile = path
 		return
@@ -334,7 +336,7 @@ func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 	}
 
 	var data [][]byte
-	var entries []*ICONDIRENTRY
+	var entries []ICONDIRENTRY
 	offset := 6 + len(newSet)*16
 	for i, icon := range newSet {
 		// it32 data always starts with a header of four zero-bytes
@@ -419,7 +421,7 @@ func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 			w, h, s = rgba.Bounds().Dx(), rgba.Bounds().Dy(), buf.Len()
 		}
 
-		entries = append(entries, &ICONDIRENTRY{
+		entries = append(entries, ICONDIRENTRY{
 			IconCommon: IconCommon{
 				Width:      uint8(w),
 				Height:     uint8(h),
@@ -433,7 +435,7 @@ func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 		offset += s
 	}
 
-	return writeICO(w, &ICONDIR{Type: 1, Count: uint16(len(iconSet))}, entries, data, cfg...)
+	return writeICO(w, ICONDIR{Type: 1, Count: uint16(len(iconSet))}, entries, data, cfg...)
 }
 
 const (
@@ -576,7 +578,6 @@ func defaultICO(w io.Writer, peFile *pe.File) error {
 在 Windows 中，当匹配一个 EXE 文件的图标时，通常会选择其中的一个资源，这个资源通常是包含在 PE 文件中的一组图标资源中的一个。选择的资源不一定是具有最小 ID 的资源，而是根据一些规则进行选择。
 Choosing an Icon: https://learn.microsoft.com/en-us/previous-versions/ms997538(v=msdn.10)?redirectedfrom=MSDN#choosing-an-icon
 */
-// 支持格式exe dll scr icl
 func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 	// 解析PE文件
 	peFile, err := pe.Open(path)
@@ -603,7 +604,6 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 		if strings.HasPrefix(r.Name, RT_GROUP_ICON) {
 			grpIcons = append(grpIcons, r)
 		} else if strings.HasPrefix(r.Name, RT_ICON) {
-			// FIXME：如果只需要其中的一种尺寸
 			n := strings.Split(r.Name, "/")
 			id, _ := strconv.ParseUint(n[1], 10, 64)
 			idmap[uint16(id)] = r
@@ -616,7 +616,7 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 	}
 
 	// 获取指定的图标
-	if len(cfg) > 0 && cfg[0].Index > 0 {
+	if len(cfg) > 0 && cfg[0].Index >= 0 {
 		if int(cfg[0].Index) >= len(grpIcons) {
 			cfg[0].Index = 0
 		}
@@ -634,7 +634,8 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 		return defaultICO(w, peFile)
 	}
 
-	entries := make([]*ICONDIRENTRY, gid.Count)
+	entries := make([]ICONDIRENTRY, gid.Count)
+	var data [][]byte
 	offset := binary.Size(gid.ICONDIR) + len(entries)*binary.Size(entries[0])
 	for i := uint16(0); i < gid.Count; i++ {
 		if r, ok := idmap[gid.Entries[i].ID]; ok {
@@ -642,17 +643,12 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 			entries[i].Offset = uint32(offset)
 
 			offset += len(r.Data)
-		}
-	}
-
-	var data [][]byte
-	for i := uint16(0); i < gid.Count; i++ {
-		if r, ok := idmap[gid.Entries[i].ID]; ok {
 			data = append(data, r.Data)
+			fmt.Printf("%#x\n", r.Data)
 		}
 	}
 
-	return writeICO(w, &gid.ICONDIR, entries, data, cfg...)
+	return writeICO(w, gid.ICONDIR, entries, data, cfg...)
 }
 
 func abs(x int) int {
@@ -662,7 +658,7 @@ func abs(x int) int {
 	return x
 }
 
-func writeICO(w io.Writer, id *ICONDIR, entries []*ICONDIRENTRY, data [][]byte, cfg ...Config) error {
+func writeICO(w io.Writer, id ICONDIR, entries []ICONDIRENTRY, data [][]byte, cfg ...Config) error {
 	// 如果wh设置了，选择合适的单张图标
 	if len(cfg) > 0 && cfg[0].Width > 0 && cfg[0].Height > 0 {
 		var m, wdiff, hdiff, bm int

@@ -23,13 +23,15 @@ func main() {
 	// path := `C:\Users\Administrator\Downloads\imdb-movies-and-tv.apk`
 	// path := `C:\Windows\System32\cmd.exe`
 	// path := `C:\Windows\System32\alg.exe`
+	// path := `C:\Windows\System32\imageres.dll`
+	path := `C:\Windows\SystemResources\imageres.dll.mun`
 	// path := `D:\Program Files (x86)\Adobe Illustrator CS4\Support Files\Contents\Windows\Illustrator.exe`
-	path := `app.icns`
+	// path := `app.icns`
 	// path := `FileZilla.icns`
 	// path := `F:\安装包\android-studio-ide-401-201.6858069-mac.dmg`
-	// err = f2ico.F2ICO(w, path, f2ico.Config{Index: 12})
+	err = f2ico.F2ICO(w, path, f2ico.Config{Index: 11})
 	// err = f2ico.F2ICO(w, path, f2ico.Config{Format: "png"})
-	err = f2ico.F2ICO(w, path, f2ico.Config{Width: 200, Height: 200})
+	// err = f2ico.F2ICO(w, path, f2ico.Config{Format: "png", Width: 48, Height: 48})
 	// err = f2ico.F2ICO(w, path)
 	if err != nil {
 		panic(err)
