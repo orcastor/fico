@@ -8,7 +8,6 @@ import (
 	"errors"
 	"image"
 	"image/color"
-	"image/draw"
 	"image/png"
 	"io"
 	"math"
@@ -27,6 +26,7 @@ import (
 	_ "github.com/cbeer/jpeg2000"
 	"github.com/tmc/icns"
 	_ "golang.org/x/image/bmp"
+	"golang.org/x/image/draw"
 	_ "golang.org/x/image/tiff"
 )
 
@@ -34,7 +34,7 @@ type Config struct {
 	Format string // png or ico(default)
 	Width  int    // 0 for all
 	Height int    // 0 for all
-	Index  int    // 0 default
+	Index  int    // 0 default, enabled for PE only
 }
 
 var apkRegex = regexp.MustCompile(`^res/mipmap-((:?x{0,3}h)|[ml])dpi[^\/]*/.*\.png$`)
@@ -239,8 +239,13 @@ func IMG2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 		return err
 	}
 
-	rgba := image.NewRGBA(img.Bounds())
-	draw.Draw(rgba, rgba.Bounds(), img, image.Point{0, 0}, draw.Src)
+	var rgba *image.RGBA
+	if len(cfg) > 0 && (cfg[0].Width != img.Bounds().Dx() || cfg[0].Height != img.Bounds().Dy()) {
+		rgba = zoomImg(img, cfg[0].Width, cfg[0].Height)
+	} else {
+		rgba = image.NewRGBA(img.Bounds())
+		draw.Draw(rgba, rgba.Bounds(), img, image.Point{0, 0}, draw.Src)
+	}
 
 	var buf bytes.Buffer
 	png.Encode(&buf, rgba)
@@ -299,7 +304,7 @@ func icnsBRLDecode(data []byte) (ret []byte) {
 }
 
 func isPNG(data []byte) bool {
-	return len(data) > 8 && bytes.Compare(data, []byte{'\x89', 'P', 'N', 'G', '\r', '\n', '\x1a', '\n'}) == 0
+	return len(data) > 8 && bytes.Equal(data[:8], []byte{'\x89', 'P', 'N', 'G', '\r', '\n', '\x1a', '\n'})
 }
 
 func isARGB(data []byte) bool {
@@ -323,7 +328,6 @@ func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 			continue
 		case "s8mk", "l8mk", "h8mk", "t8mk":
 			maskMap[len(newSet)-1] = icon
-			break
 		default:
 			newSet = append(newSet, icon)
 		}
@@ -350,8 +354,7 @@ func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 			}
 			w, h, s = img.Width, img.Height, len(icon.Data)
 		} else {
-			needDecode := true
-			hasAlphaChan := 1
+			decoded, hasA := false, 1
 			var rgba *image.RGBA
 			switch string(icon.Type[:]) {
 			// 24-bit RGB
@@ -363,17 +366,17 @@ func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 				} else {
 					icon.Data = append([]byte("ARGB"), icnsBRLDecode(icon.Data)...)
 					// 说明有没有透明度数据
-					hasAlphaChan = 0
+					hasA = 0
 				}
-				needDecode = false
+				decoded = true
 			default:
 			}
 
 			if isARGB(icon.Data) {
-				if needDecode {
-					icon.Data = icnsBRLDecode(icon.Data[4:])
-				} else {
+				if decoded {
 					icon.Data = icon.Data[4:]
+				} else {
+					icon.Data = icnsBRLDecode(icon.Data[4:])
 				}
 				pixles := len(icon.Data) / 4
 				w := int(math.Sqrt(float64(pixles)))
@@ -385,16 +388,16 @@ func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 						no := (y*w + x)
 
 						var alpha uint8
-						if hasAlphaChan > 0 {
+						if hasA > 0 {
 							// 最前面是透明度数据
 							alpha = icon.Data[no]
 						} else {
 							alpha = 0xFF
 						}
 						rgba.Set(x, y, color.RGBA{
-							R: icon.Data[no+hasAlphaChan*pixles],
-							G: icon.Data[no+(1+hasAlphaChan)*pixles],
-							B: icon.Data[no+(2+hasAlphaChan)*pixles],
+							R: icon.Data[no+hasA*pixles],
+							G: icon.Data[no+(1+hasA)*pixles],
+							B: icon.Data[no+(2+hasA)*pixles],
 							A: alpha,
 						})
 					}
@@ -430,25 +433,7 @@ func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 		offset += s
 	}
 
-	err = binary.Write(w, binary.LittleEndian, &ICONDIR{Type: 1, Count: uint16(len(iconSet))})
-	if err != nil {
-		return err
-	}
-
-	for i := 0; i < len(entries); i++ {
-		err = binary.Write(w, binary.LittleEndian, entries[i])
-		if err != nil {
-			return err
-		}
-	}
-
-	for _, d := range data {
-		_, err = w.Write(d)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return writeICO(w, &ICONDIR{Type: 1, Count: uint16(len(iconSet))}, entries, data, cfg...)
 }
 
 const (
@@ -564,12 +549,7 @@ type ICONDIRENTRY struct {
 	Offset uint32 // 图像数据的偏移量
 }
 
-type ICOFILEHEADER struct {
-	ICONDIR
-	Entries []ICONDIRENTRY
-}
-
-func DefaultICO(w io.Writer, peFile *pe.File) error {
+func defaultICO(w io.Writer, peFile *pe.File) error {
 	// 如果没有资源段
 	var subsystem uint16
 	switch peFile.OptionalHeader.(type) {
@@ -606,7 +586,7 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 
 	rsrc := peFile.Section(SECTION_RESOURCES)
 	if rsrc == nil {
-		return DefaultICO(w, peFile)
+		return defaultICO(w, peFile)
 	}
 
 	// 解析资源表
@@ -632,7 +612,7 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 
 	// 如果没有图标，有资源段说明是GUI
 	if len(grpIcons) <= 0 {
-		return DefaultICO(w, peFile)
+		return defaultICO(w, peFile)
 	}
 
 	// 获取指定的图标
@@ -651,16 +631,10 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 
 	// 如果没有图标，有资源段说明是GUI
 	if gid.Count <= 0 {
-		return DefaultICO(w, peFile)
+		return defaultICO(w, peFile)
 	}
 
-	// FIXME：如果输出PNG
-	err = binary.Write(w, binary.LittleEndian, gid.ICONDIR)
-	if err != nil {
-		return err
-	}
-
-	entries := make([]ICONDIRENTRY, gid.Count)
+	entries := make([]*ICONDIRENTRY, gid.Count)
 	offset := binary.Size(gid.ICONDIR) + len(entries)*binary.Size(entries[0])
 	for i := uint16(0); i < gid.Count; i++ {
 		if r, ok := idmap[gid.Entries[i].ID]; ok {
@@ -668,21 +642,123 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 			entries[i].Offset = uint32(offset)
 
 			offset += len(r.Data)
-
-			err = binary.Write(w, binary.LittleEndian, entries[i])
-			if err != nil {
-				return err
-			}
 		}
 	}
 
+	var data [][]byte
 	for i := uint16(0); i < gid.Count; i++ {
 		if r, ok := idmap[gid.Entries[i].ID]; ok {
-			_, err = w.Write(r.Data)
+			data = append(data, r.Data)
+		}
+	}
+
+	return writeICO(w, &gid.ICONDIR, entries, data, cfg...)
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+func writeICO(w io.Writer, id *ICONDIR, entries []*ICONDIRENTRY, data [][]byte, cfg ...Config) error {
+	// 如果wh设置了，选择合适的单张图标
+	if len(cfg) > 0 && cfg[0].Width > 0 && cfg[0].Height > 0 {
+		var m, wdiff, hdiff, bm int
+		wdiff, hdiff = 0xFFFFF, 0xFFFFF
+		for i, e := range entries {
+			if e.BitCount >= uint16(bm) {
+				bm = int(e.BitCount)
+				var ws, hs int
+				if e.Width <= 0 || e.Height <= 0 {
+					img, _, _ := image.DecodeConfig(bytes.NewReader(data[i]))
+					ws, hs = img.Width, img.Height
+				} else {
+					ws, hs = int(e.Width), int(e.Height)
+				}
+				if abs(ws-cfg[0].Width) < wdiff && abs(hs-cfg[0].Height) < hdiff {
+					wdiff, hdiff = abs(ws-cfg[0].Width), abs(hs-cfg[0].Height)
+					m = i
+				}
+			}
+		}
+		return IMG2ICO(w, bytes.NewReader(data[m]), cfg...)
+	}
+
+	// 没有设置，或者不是png格式
+	if len(cfg) <= 0 || cfg[0].Format != "png" {
+		err := binary.Write(w, binary.LittleEndian, id)
+		if err != nil {
+			return err
+		}
+
+		for _, entry := range entries {
+			err = binary.Write(w, binary.LittleEndian, entry)
 			if err != nil {
 				return err
 			}
 		}
+
+		for _, d := range data {
+			_, err = w.Write(d)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	return nil
+
+	// 如果是png格式，且wh未设置那么选择色值最多里面像素最大的
+	var m, wm, hm, bm int
+	for i, e := range entries {
+		if e.BitCount >= uint16(bm) {
+			bm = int(e.BitCount)
+			var ws, hs int
+			if e.Width <= 0 || e.Height <= 0 {
+				img, _, _ := image.DecodeConfig(bytes.NewReader(data[i]))
+				ws, hs = img.Width, img.Height
+			} else {
+				ws, hs = int(e.Width), int(e.Height)
+			}
+			if ws > wm && hs > hm {
+				wm, hm = ws, hs
+				m = i
+			}
+		}
+	}
+
+	_, err := w.Write(data[m])
+	return err
+}
+
+func zoomImg(srcImg image.Image, tW, tH int) *image.RGBA {
+	// 计算目标图片的纵横比
+	srcWidth := srcImg.Bounds().Dx()
+	srcHeight := srcImg.Bounds().Dy()
+	srcRatio := float64(srcWidth) / float64(srcHeight)
+	targetRatio := float64(tW) / float64(tH)
+
+	// 计算缩放后的宽度和高度
+	var width, height int
+	if srcRatio > targetRatio {
+		width = tW
+		height = int(float64(width) / srcRatio)
+	} else {
+		height = tH
+		width = int(float64(height) * srcRatio)
+	}
+
+	// 计算目标图片的起始位置
+	x := (tW - width) / 2
+	y := (tH - height) / 2
+
+	// 使用nearest-neighbor算法缩放图像
+	resizedImg := image.NewRGBA(image.Rect(0, 0, width, height))
+	draw.NearestNeighbor.Scale(resizedImg, resizedImg.Bounds(), srcImg, srcImg.Bounds(), draw.Over, nil)
+
+	// 将缩放后的图像绘制到目标图片上
+	img := image.NewRGBA(image.Rect(0, 0, tW, tH))
+	draw.Draw(img, image.Rect(x, y, x+width, y+height), resizedImg, image.Point{0, 0}, draw.Src)
+	return img
 }

@@ -15,17 +15,22 @@ func main() {
 
 	defer f.Close()
 
+	w := bufio.NewWriter(f)
+	defer w.Flush()
+
 	// path := `C:\Program Files\JetBrains\GoLand 2023.3.2\bin\goland64.exe`
-	// path := `C:\Users\Administrator\Desktop\QQ拼音截图20240208232818.jpg`
+	// path := `E:\prvw测试文档\QQ拼音截图20240208232818.jpg`
 	// path := `C:\Users\Administrator\Downloads\imdb-movies-and-tv.apk`
 	// path := `C:\Windows\System32\cmd.exe`
 	// path := `C:\Windows\System32\alg.exe`
 	// path := `D:\Program Files (x86)\Adobe Illustrator CS4\Support Files\Contents\Windows\Illustrator.exe`
-	path := `FileZilla.icns`
+	path := `app.icns`
+	// path := `FileZilla.icns`
 	// path := `F:\安装包\android-studio-ide-401-201.6858069-mac.dmg`
-	// err = f2ico.F2ICO(bufio.NewWriter(f), path, f2ico.Config{Index: 12})
-	// err = f2ico.F2ICO(bufio.NewWriter(f), path, f2ico.Config{Format: "png"})
-	err = f2ico.F2ICO(bufio.NewWriter(f), path)
+	// err = f2ico.F2ICO(w, path, f2ico.Config{Index: 12})
+	// err = f2ico.F2ICO(w, path, f2ico.Config{Format: "png"})
+	err = f2ico.F2ICO(w, path, f2ico.Config{Width: 200, Height: 200})
+	// err = f2ico.F2ICO(w, path)
 	if err != nil {
 		panic(err)
 	}
