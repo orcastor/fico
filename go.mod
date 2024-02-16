@@ -1,4 +1,4 @@
-module github.com/orcastor/f2ico
+module github.com/orcastor/fico
 
 go 1.21.5
 
