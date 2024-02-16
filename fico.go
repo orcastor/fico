@@ -305,7 +305,7 @@ func icnsBRLDecode(data []byte) (ret []byte) {
 }
 
 func isPNG(data []byte) bool {
-	return len(data) > 8 && bytes.Equal(data[:8], []byte{'\x89', 'P', 'N', 'G', '\r', '\n', '\x1a', '\n'})
+	return len(data) > 8 && string(data[:8]) == "\211PNG\r\n\032\n"
 }
 
 func isARGB(data []byte) bool {
@@ -653,6 +653,200 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 	return writeICO(w, gid.ICONDIR, entries, data, cfg...)
 }
 
+type BITMAPINFOHEADER struct {
+	Size            uint32 // The size of the header (in bytes)
+	Width           int32  // The bitmap's width (in pixels)
+	Height          int32  // The bitmap's height (in pixels)
+	Planes          uint16 // The number of color planes (must be 1)
+	BitCount        uint16 // The number of bits per pixel
+	Compression     uint32 // The compression method being used
+	SizeImage       uint32 // The image size (in bytes)
+	XPelsPerMeter   int32  // The horizontal resolution (pixels per meter)
+	YPelsPerMeter   int32  // The vertical resolution (pixels per meter)
+	ColorsUsed      uint32 // The number of colors in the color palette
+	ColorsImportant uint32 // The number of important colors used
+}
+
+func Convert16BitToARGB(value uint16, mask uint32) color.Color {
+	r := uint32((value >> 7) & 0xF8)
+	g := uint32((value << 6) & 0xFC00)
+	b := uint32((uint32(value) << 19) & 0xF80000)
+	// Apply mask
+	r = (r * (mask >> 16 & 0xFF)) >> 8
+	g = (g * (mask >> 8 & 0xFF)) >> 8
+	b = (b * (mask & 0xFF)) >> 8
+	return color.RGBA{uint8(r), uint8(g), uint8(b), 0xFF}
+}
+
+func GetMaskBit(data []byte, x, y, w, h int) uint32 {
+	maskDataRowSize := (((w + 31) >> 5) * 4)
+	byteIndex := (maskDataRowSize * ((h - 1) - y)) + (x >> 3)
+	bitIndex := uint(0x07 - (x & 0x07))
+	bit := ((data[byteIndex] >> bitIndex) & 1)
+	if bit == 0 {
+		return 0xFFFFFFFF
+	}
+	return 0
+}
+
+func GetColorMonochrome(xorData, andData []byte, x, y, w, h int, pal []color.Color) color.Color {
+	maskDataRowSize := (((w + 31) >> 5) * 4)
+	xorBit := (((xorData[(maskDataRowSize*((h-1)-y))+(x>>3)] >> (0x07 - (x & 0x07))) << 1) & 2)
+	andBit := ((andData[(maskDataRowSize*((h-1)-y))+(x>>3)]) >> (0x07 - (x & 0x07))) & 1
+	value := xorBit | andBit
+	return pal[value]
+}
+
+func CreateBmp32bppFromIconResData(data []byte, depth, w, h, colors int) *image.RGBA {
+	bmp := image.NewRGBA(image.Rect(0, 0, w, h))
+
+	ignoreSize := 40
+	colorDataSize := ((((((w * depth) + 7) >> 3) + 3) &^ 3) * h)
+
+	switch depth {
+	default:
+		return bmp
+	case 32:
+		src := data[ignoreSize:]
+		for yy := h - 1; yy >= 0; yy-- {
+			for xx := 0; xx < w; xx++ {
+				if (yy*w*4)+(xx*4)+3 >= len(src) {
+					return bmp
+				}
+				b := src[(yy*w*4)+(xx*4)]
+				g := src[(yy*w*4)+(xx*4)+1]
+				r := src[(yy*w*4)+(xx*4)+2]
+				a := src[(yy*w*4)+(xx*4)+3]
+				bmp.Set(xx, yy, color.RGBA{R: r, G: g, B: b, A: a})
+			}
+		}
+	case 24:
+		src := data[ignoreSize:]
+		bitmask := data[ignoreSize+colorDataSize:]
+		pixel := 0
+		for yy := h - 1; yy >= 0; yy-- {
+			for xx := 0; xx < w; xx++ {
+				if pixel >= len(src)/3 {
+					return bmp
+				}
+				r := src[pixel*3]
+				g := src[pixel*3+1]
+				b := src[pixel*3+2]
+				mask := GetMaskBit(bitmask, xx, yy, w, h)
+				r = r & uint8(mask>>16)
+				g = g & uint8(mask>>8)
+				b = b & uint8(mask)
+				bmp.Set(xx, yy, color.RGBA{r, g, b, 0xFF})
+				pixel++
+			}
+		}
+	case 16:
+		src := data[ignoreSize:]
+		bitmask := data[ignoreSize+colorDataSize:]
+		pixel := 0
+		for yy := h - 1; yy >= 0; yy-- {
+			for xx := 0; xx < w; xx++ {
+				if pixel >= len(src)/2 {
+					return bmp
+				}
+				bmp.Set(xx, yy, Convert16BitToARGB(binary.LittleEndian.Uint16(src[pixel*2:]), GetMaskBit(bitmask, xx, yy, w, h)))
+				pixel++
+			}
+		}
+	case 8:
+		src := data[ignoreSize:]
+		pal := make([]color.Color, colors)
+		for i := 0; i < colors; i++ {
+			if (i*4)+3 >= len(src) {
+				return bmp
+			}
+			b := src[(i*4)+0]
+			g := src[(i*4)+1]
+			r := src[(i*4)+2]
+			a := src[(i*4)+3]
+			pal[i] = color.RGBA{R: r, G: g, B: b, A: a}
+		}
+		pixel := 0
+		for yy := h - 1; yy >= 0; yy-- {
+			for xx := 0; xx < w; xx++ {
+				if pixel >= len(src) {
+					return bmp
+				}
+				colorIndex := int(src[pixel])
+				if colorIndex < len(pal) {
+					bmp.Set(xx, yy, pal[colorIndex])
+				} else {
+					bmp.Set(xx, yy, color.RGBA{})
+				}
+				pixel++
+			}
+		}
+	case 4:
+		src := data[ignoreSize:]
+		pal := make([]color.Color, colors)
+		for i := 0; i < colors; i++ {
+			if (i*4)+3 >= len(src) {
+				return bmp
+			}
+			b := src[(i*4)+0]
+			g := src[(i*4)+1]
+			r := src[(i*4)+2]
+			a := src[(i*4)+3]
+			pal[i] = color.RGBA{R: r, G: g, B: b, A: a}
+		}
+		pixel := 0
+		for yy := h - 1; yy >= 0; yy-- {
+			for xx := 0; xx < w; xx++ {
+				if (yy*w/2)+xx/2 >= len(src) {
+					return bmp
+				}
+				colorIndex := int(src[(yy*w/2)+(xx/2)]) // 2 pixels per byte
+				if xx%2 == 0 {
+					colorIndex >>= 4
+				} else {
+					colorIndex &= 0x0F
+				}
+				if colorIndex < len(pal) {
+					bmp.Set(xx, yy, pal[colorIndex])
+				} else {
+					bmp.Set(xx, yy, color.RGBA{})
+				}
+				pixel++
+			}
+		}
+	case 1:
+		src := data[ignoreSize:]
+		bitmaskXOR := data[ignoreSize+(colors*4):]
+		bitmaskAND := data[ignoreSize+(colors*4)+colorDataSize:]
+		retColors := make([]color.Color, 4)
+		for i := 0; i < 4; i++ {
+			if (i*4)+3 >= len(src) {
+				return bmp
+			}
+			b := src[(i*4)+0]
+			g := src[(i*4)+1]
+			r := src[(i*4)+2]
+			a := src[(i*4)+3]
+			retColors[i] = color.RGBA{R: r, G: g, B: b, A: a}
+		}
+		for yy := h - 1; yy >= 0; yy-- {
+			for xx := 0; xx < w; xx++ {
+				xorIndex := (yy*w + xx) / 8
+				andIndex := (yy*w + xx) / 8
+				if xorIndex >= len(bitmaskXOR) || andIndex >= len(bitmaskAND) {
+					return bmp
+				}
+				xorBit := ((bitmaskXOR[xorIndex] >> (7 - (uint(xx) % 8))) & 0x01) << 1
+				andBit := ((bitmaskAND[andIndex] >> (7 - (uint(xx) % 8))) & 0x01)
+				value := xorBit | andBit
+				bmp.Set(xx, yy, retColors[value])
+			}
+		}
+	}
+
+	return bmp
+}
+
 func abs(x int) int {
 	if x < 0 {
 		return -x
@@ -669,7 +863,7 @@ func writeICO(w io.Writer, id ICONDIR, entries []ICONDIRENTRY, data [][]byte, cf
 			if e.BitCount >= uint16(bm) {
 				bm = int(e.BitCount)
 				var ws, hs int
-				if e.Width <= 0 || e.Height <= 0 {
+				if e.Width <= 0 || e.Height <= 0 { // 超过大小的一定是PNG的
 					img, _, _ := image.DecodeConfig(bytes.NewReader(data[i]))
 					ws, hs = img.Width, img.Height
 				} else {
@@ -681,7 +875,24 @@ func writeICO(w io.Writer, id ICONDIR, entries []ICONDIRENTRY, data [][]byte, cf
 				}
 			}
 		}
-		return IMG2ICO(w, bytes.NewReader(data[m]), cfg...)
+
+		if isPNG(data[m]) {
+			return IMG2ICO(w, bytes.NewReader(data[m]), cfg...)
+		} else {
+			var bih BITMAPINFOHEADER
+
+			err := binary.Read(bytes.NewReader(data[m]), binary.LittleEndian, &bih)
+			if err != nil {
+				return err
+			}
+
+			nbmp := image.NewRGBA(image.Rect(0, 0, int(bih.Width), int(bih.Height)))
+			draw.Draw(nbmp, nbmp.Bounds(), CreateBmp32bppFromIconResData(data[m], bm, int(bih.Width), int(bih.Height), int(bih.ColorsUsed)), image.Point{0, 0}, draw.Src)
+
+			var buf bytes.Buffer
+			png.Encode(&buf, nbmp)
+			return IMG2ICO(w, bytes.NewReader(buf.Bytes()), cfg...)
+		}
 	}
 
 	// 没有设置，或者不是png格式
@@ -713,7 +924,7 @@ func writeICO(w io.Writer, id ICONDIR, entries []ICONDIRENTRY, data [][]byte, cf
 		if e.BitCount >= uint16(bm) {
 			bm = int(e.BitCount)
 			var ws, hs int
-			if e.Width <= 0 || e.Height <= 0 {
+			if e.Width <= 0 || e.Height <= 0 { // 超过大小的一定是PNG的
 				img, _, _ := image.DecodeConfig(bytes.NewReader(data[i]))
 				ws, hs = img.Width, img.Height
 			} else {
