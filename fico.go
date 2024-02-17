@@ -13,7 +13,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -24,6 +23,8 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 
+	"github.com/andrianbdn/iospng"
+	"github.com/appflight/apkparser"
 	_ "github.com/cbeer/jpeg2000"
 	"github.com/tmc/icns"
 	_ "golang.org/x/image/bmp"
@@ -35,18 +36,7 @@ type Config struct {
 	Format string // png or ico(default)
 	Width  int    // 0 for all
 	Height int    // 0 for all
-	Index  int    // 0 default, negtive for all，enabled for PE only
-}
-
-var apkRegex = regexp.MustCompile(`^res/mipmap-((:?x{0,3}h)|[ml])dpi[^\/]*/.*\.png$`)
-
-var apkDensityWeight = map[string]int8{
-	"xxxh": 6,
-	"xxh":  5,
-	"xh":   4,
-	"h":    3,
-	"m":    2,
-	"l":    1,
+	Index  *int   // 0 default, nil for all，enabled for PE only
 }
 
 func F2ICO(w io.Writer, path string, cfg ...Config) error {
@@ -76,42 +66,38 @@ func F2ICO(w io.Writer, path string, cfg ...Config) error {
 		}
 
 	case "apk":
+		appInfo, err := apkparser.ParseApk(path)
+		if err != nil {
+			return err
+		}
+
+		return img2ICO(w, appInfo.Icon, cfg...)
+
+	case "ipa":
 		r, err := zip.OpenReader(path)
 		if err != nil {
 			return err
 		}
 		defer r.Close()
 
-		/*
-			APK 文件实际上是一个 ZIP 压缩文件，其中包含了应用程序的各种资源和文件。应用程序的图标通常存放在以下路径：
-
-			res/mipmap-<density>(-...)/ic_launcher.png
-			在这个路径中，<density> 是密度相关的标识符，代表了不同分辨率的图标。常见的标识符包括 hdpi、xhdpi、xxhdpi 等。不同密度的图标可以提供给不同密度的屏幕使用，以保证图标在不同设备上显示时具有良好的清晰度和质量。
-
-			注意：实际的路径可能会因应用程序的结构而有所不同，上述路径仅为一般情况。
-		*/
-		var maxWeight int8
-		var maxF *zip.File
+		var iosIconFile *zip.File
 		for _, f := range r.File {
-			// 检查文件名
-			if match := apkRegex.FindStringSubmatch(f.Name); match != nil {
-				// 提取density信息
-				if apkDensityWeight[match[1]] > maxWeight {
-					maxF = f
-					maxWeight = apkDensityWeight[match[1]]
-				}
+			switch {
+			case strings.Contains(f.Name, "AppIcon"):
+				iosIconFile = f
 			}
 		}
-		if maxF != nil {
-			// 打开文件
-			rc, err := maxF.Open()
-			if err != nil {
-				return err
-			}
-			defer rc.Close()
 
-			return IMG2ICO(w, rc, cfg...)
+		rc, err := iosIconFile.Open()
+		if err != nil {
+			return err
 		}
+		defer rc.Close()
+
+		var buf bytes.Buffer
+		iospng.PngRevertOptimization(rc, &buf)
+
+		return IMG2ICO(w, bytes.NewReader(buf.Bytes()), cfg...)
 	}
 
 	return errors.New("conversion failed")
@@ -119,7 +105,7 @@ func F2ICO(w io.Writer, path string, cfg ...Config) error {
 
 type Info struct {
 	IconFile  string
-	IconIndex uint16
+	IconIndex int
 	FilePath  string
 }
 
@@ -141,7 +127,7 @@ func GetInfo(path string) (info Info, err error) {
 		 */
 		info.IconFile = filepath.Join(path, "Contents/Resources/AppIcon.icns")
 		return
-	case "exe", "dll", "mui", "mun", "ico", "bmp", "gif", "jpg", "jpeg", "png", "tiff", "icns", "dmg", "apk":
+	case "exe", "dll", "mui", "mun", "ico", "bmp", "gif", "jpg", "jpeg", "png", "tiff", "icns", "dmg", "ipa", "apk":
 		// 尝试把iconfile设置为自己
 		info.IconFile = path
 		return
@@ -196,6 +182,8 @@ func GetInfo(path string) (info Info, err error) {
 			[.ShellClassInfo]
 			IconFile=path\to\icon.ico
 			IconIndex=0
+			[.ShellClassInfo]
+			IconResource=%SystemRoot%\system32\imageres.dll,-184
 
 			IconFile 字段指定要用作文件夹图标的图标文件的路径。这可以是包含图标的 .ico 文件，也可以是 .exe 或 .dll 文件，其中包含一个或多个图标资源。
 			IconIndex 字段指定要在 IconFile 中使用的图标的索引。如果 IconFile 是 .ico 文件，则索引从0开始，表示图标在文件中的位置。如果 IconFile 是 .exe 或 .dll 文件，则索引表示图标资源的标识符。
@@ -207,7 +195,18 @@ func GetInfo(path string) (info Info, err error) {
 		}
 
 		info.IconFile = section.Key("IconFile").String()
-		info.IconIndex = uint16(section.Key("IconFile").MustUint(0))
+		if info.IconFile != "" {
+			info.IconIndex = section.Key("IconIndex").MustInt(0)
+		} else {
+			iconResource := section.Key("IconResource").String()
+			s := strings.Split(iconResource, ",")
+			if len(s) >= 1 {
+				info.IconFile = s[0]
+				if len(s) >= 2 {
+					info.IconIndex, _ = strconv.Atoi(s[1])
+				}
+			}
+		}
 	case "desktop":
 		/*
 			创建包含图标和其他资源的 .desktop 文件来为 .AppImage/.run 文件指定图标。然后，您可以将 .AppImage/.run 文件与 .desktop 文件一起分发，并通过 .desktop 文件来启动 .AppImage/.run 文件，并在系统中显示指定的图标。
@@ -241,16 +240,12 @@ func IMG2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 		return err
 	}
 
-	var rgba *image.RGBA
-	if len(cfg) > 0 && (cfg[0].Width != img.Bounds().Dx() || cfg[0].Height != img.Bounds().Dy()) {
-		rgba = zoomImg(img, cfg[0].Width, cfg[0].Height)
-	} else {
-		rgba = image.NewRGBA(img.Bounds())
-		draw.Draw(rgba, rgba.Bounds(), img, image.Point{0, 0}, draw.Src)
-	}
+	return img2ICO(w, zoomImg(img, cfg...), cfg...)
+}
 
+func img2ICO(w io.Writer, img image.Image, cfg ...Config) (err error) {
 	var buf bytes.Buffer
-	png.Encode(&buf, rgba)
+	png.Encode(&buf, img)
 
 	if len(cfg) <= 0 || cfg[0].Format != "png" {
 		err = binary.Write(w, binary.LittleEndian, &ICONDIR{Type: 1, Count: 1})
@@ -260,8 +255,8 @@ func IMG2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 
 		err = binary.Write(w, binary.LittleEndian, &ICONDIRENTRY{
 			IconCommon: IconCommon{
-				Width:      uint8(rgba.Bounds().Dx()),
-				Height:     uint8(rgba.Bounds().Dy()),
+				Width:      uint8(img.Bounds().Dx()),
+				Height:     uint8(img.Bounds().Dy()),
 				Planes:     1,
 				BitCount:   32,
 				BytesInRes: uint32(buf.Len()),
@@ -620,12 +615,21 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 	}
 
 	// 获取指定的图标
-	if len(cfg) > 0 && cfg[0].Index >= 0 {
-		if int(cfg[0].Index) >= len(grpIcons) {
-			cfg[0].Index = 0
+	if len(cfg) > 0 {
+		if cfg[0].Index != nil && *cfg[0].Index < 0 {
+			// 如果是负数，那么尝试id
+			if r, ok := idmap[uint16(-*cfg[0].Index)]; ok {
+				return res2ICO(w, r.Data, cfg...)
+			}
+			return defaultICO(w, peFile)
 		}
-		r := grpIcons[cfg[0].Index]
-		rd := bytes.NewReader(r.Data)
+		var data []byte
+		if cfg[0].Index == nil || int(*cfg[0].Index) >= len(grpIcons) {
+			data = grpIcons[0].Data
+		} else {
+			data = grpIcons[*cfg[0].Index].Data
+		}
+		rd := bytes.NewReader(data)
 		binary.Read(rd, binary.LittleEndian, &gid.ICONDIR)
 		gid.Entries = make([]RESDIR, gid.Count)
 		for i := uint16(0); i < gid.Count; i++ {
@@ -668,42 +672,6 @@ type BITMAPINFOHEADER struct {
 	ColorsImportant uint32 // The number of important colors used
 }
 
-func trimTransparency(src *image.RGBA) *image.RGBA {
-	minX, maxX, minY, maxY := src.Bounds().Dx(), 0, src.Bounds().Dy(), 0
-	for y := 0; y < src.Bounds().Dy(); y++ {
-		for x := 0; x < src.Bounds().Dx(); x++ {
-			if src.RGBAAt(x, y).A != 0 { // 如果不透明
-				if x < minX {
-					minX = x
-				}
-				if x > maxX {
-					maxX = x
-				}
-				if y < minY {
-					minY = y
-				}
-				if y > maxY {
-					maxY = y
-				}
-			}
-		}
-	}
-
-	r := image.Rect(maxX, maxY, minX, minY)
-	if src.Bounds() == r {
-		return src
-	}
-
-	img := image.NewRGBA(r)
-	for y := r.Min.Y; y <= r.Max.Y; y++ {
-		for x := r.Min.X; x <= r.Max.X; x++ {
-			clr := src.RGBAAt(x, y)
-			img.Set(x-r.Min.X, y-r.Min.Y, clr)
-		}
-	}
-	return img
-}
-
 func convert16BitToARGB(value uint16, mask uint32) color.Color {
 	r := uint32((value >> 7) & 0xF8)
 	g := uint32((value << 6) & 0xFC00)
@@ -734,27 +702,38 @@ func getColorMonochrome(xorData, andData []byte, x, y, w, h int, pal []color.Col
 }
 
 func bmp32FromResData(data []byte, depth, w, h, colors int) *image.RGBA {
-	bmp := image.NewRGBA(image.Rect(0, 0, w, h))
+	bmp := image.NewRGBA(image.Rect(0, 0, w, w))
 
 	bih := 40
-	clrSz := ((((((w * depth) + 7) >> 3) + 3) &^ 3) * h)
+	var bitmask []byte
 
 	switch depth {
 	case 32:
-		h = int(math.Min(float64(h), float64((len(data)-bih)/4/w)))
 		pixel := 0
+		if h == w*2 {
+			bitmask = data[bih+w*w*4:]
+			h = w
+		}
 		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
 				clr := color.RGBA{}
 				binary.Read(bytes.NewReader(data[bih+pixel*4:]), binary.LittleEndian, &clr)
-				bmp.Set(xx, yy, clr)
+				var mask uint32
+				if bitmask != nil {
+					mask = getMaskBit(bitmask, xx, yy, w, h)
+				} else {
+					mask = 0xFFFFFFFF
+				}
+				bmp.Set(xx, yy, color.RGBA{clr.R & uint8(mask>>16), clr.G & uint8(mask>>8), clr.B & uint8(mask), clr.A & uint8(mask>>24)})
 				pixel++
 			}
 		}
 	case 24:
-		bitmask := data[bih+clrSz:]
+		bitmask = data[bih+w*w*3:]
 		pixel := 0
-		h = int(math.Min(float64(h), float64((len(data)-bih-clrSz)/3/w)))
+		if h == w*2 {
+			h = w
+		}
 		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
 				mask := getMaskBit(bitmask, xx, yy, w, h)
@@ -763,9 +742,11 @@ func bmp32FromResData(data []byte, depth, w, h, colors int) *image.RGBA {
 			}
 		}
 	case 16:
-		bitmask := data[bih+clrSz:]
+		bitmask = data[bih+w*w*2:]
 		pixel := 0
-		h = int(math.Min(float64(h), float64((len(data)-bih-clrSz)/2/w)))
+		if h == w*2 {
+			h = w
+		}
 		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
 				bmp.Set(xx, yy, convert16BitToARGB(binary.LittleEndian.Uint16(data[bih+pixel*2:]), getMaskBit(bitmask, xx, yy, w, h)))
@@ -778,7 +759,6 @@ func bmp32FromResData(data []byte, depth, w, h, colors int) *image.RGBA {
 			pal[i] = color.RGBA{R: data[bih+i*4+2], G: data[bih+i*4+1], B: data[bih+i*4], A: data[bih+i*4+3]}
 		}
 		pixel := 0
-		h = int(math.Min(float64(h), float64((len(data)-bih-colors*4)/w)))
 		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
 				colorIndex := int(data[bih])
@@ -794,7 +774,6 @@ func bmp32FromResData(data []byte, depth, w, h, colors int) *image.RGBA {
 			pal[i] = color.RGBA{R: data[bih+i*4+2], G: data[bih+i*4+1], B: data[bih+i*4], A: data[bih+i*4+3]}
 		}
 		pixel := 0
-		h = int(math.Min(float64(h), float64((len(data)-bih-colors*4)/(w>>1))))
 		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
 				colorIndex := int(data[bih+(yy*w/2)+(xx/2)]) // 2 pixels per byte
@@ -818,14 +797,14 @@ func bmp32FromResData(data []byte, depth, w, h, colors int) *image.RGBA {
 		}
 		pal := *(*[]uint32)(unsafe.Pointer(&data[bih]))
 		bitmaskXOR := data[bih+(colors<<2):]
-		bitmaskAND := data[bih+(colors<<2)+clrSz:]
+		clrDataSize := ((((((w * depth) + 7) >> 3) + 3) &^ 3) * h)
+		bitmaskAND := data[bih+(colors<<2)+clrDataSize:]
 		retColors := []color.Color{
 			color.RGBA{uint8(pal[0]), uint8(pal[0] >> 8), uint8(pal[0] >> 16), 0xFF},
 			color.RGBA{0x00, 0xFF, 0x00, 0xFF},
 			color.RGBA{uint8(pal[1]), uint8(pal[1] >> 8), uint8(pal[1] >> 16), 0xFF},
 			color.RGBA{0x00, 0x00, 0xFF, 0xFF},
 		}
-		h = int(math.Min(float64(h), float64((len(data)-bih-(colors<<2)-clrSz)/(w>>3))))
 		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
 				bmp.Set(xx, yy, getColorMonochrome(bitmaskXOR, bitmaskAND, xx, yy, w, h, retColors))
@@ -833,7 +812,21 @@ func bmp32FromResData(data []byte, depth, w, h, colors int) *image.RGBA {
 		}
 	}
 
-	return trimTransparency(bmp)
+	return bmp
+}
+
+func res2ICO(w io.Writer, data []byte, cfg ...Config) error {
+	if isPNG(data) {
+		return IMG2ICO(w, bytes.NewReader(data), cfg...)
+	}
+
+	var bih BITMAPINFOHEADER
+	err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &bih)
+	if err != nil {
+		return err
+	}
+
+	return img2ICO(w, zoomImg(bmp32FromResData(data, int(bih.BitCount), int(bih.Width), int(bih.Height), int(bih.ColorsUsed)), cfg...), cfg...)
 }
 
 func abs(x int) int {
@@ -865,28 +858,7 @@ func writeICO(w io.Writer, id ICONDIR, entries []ICONDIRENTRY, data [][]byte, cf
 			}
 		}
 
-		if isPNG(data[m]) {
-			return IMG2ICO(w, bytes.NewReader(data[m]), cfg...)
-		} else {
-			var bih BITMAPINFOHEADER
-			err := binary.Read(bytes.NewReader(data[m]), binary.LittleEndian, &bih)
-			if err != nil {
-				return err
-			}
-
-			bmp := bmp32FromResData(data[m], bm, int(bih.Width), int(bih.Height), int(bih.ColorsUsed))
-
-			var rgba *image.RGBA
-			if cfg[0].Width != bmp.Bounds().Dx() || cfg[0].Height != bmp.Bounds().Dy() {
-				rgba = zoomImg(bmp, cfg[0].Width, cfg[0].Height)
-			} else {
-				rgba = bmp
-			}
-
-			var buf bytes.Buffer
-			png.Encode(&buf, rgba)
-			return IMG2ICO(w, bytes.NewReader(buf.Bytes()), cfg...)
-		}
+		return res2ICO(w, data[m], cfg...)
 	}
 
 	// 没有设置，或者不是png格式
@@ -935,33 +907,44 @@ func writeICO(w io.Writer, id ICONDIR, entries []ICONDIRENTRY, data [][]byte, cf
 	return err
 }
 
-func zoomImg(srcImg image.Image, tW, tH int) *image.RGBA {
+func zoomImg(srcImg image.Image, cfg ...Config) *image.RGBA {
+	if len(cfg) > 0 && (cfg[0].Width == srcImg.Bounds().Dx() || cfg[0].Height == srcImg.Bounds().Dy()) {
+		switch srcImg.(type) {
+		case (*image.RGBA):
+			return srcImg.(*image.RGBA)
+		default:
+			rgba := image.NewRGBA(srcImg.Bounds())
+			draw.Draw(rgba, rgba.Bounds(), srcImg, image.Point{0, 0}, draw.Src)
+			return rgba
+		}
+	}
+
 	// 计算目标图片的纵横比
 	srcWidth := srcImg.Bounds().Dx()
 	srcHeight := srcImg.Bounds().Dy()
 	srcRatio := float64(srcWidth) / float64(srcHeight)
-	targetRatio := float64(tW) / float64(tH)
+	targetRatio := float64(cfg[0].Width) / float64(cfg[0].Height)
 
 	// 计算缩放后的宽度和高度
 	var width, height int
 	if srcRatio > targetRatio {
-		width = tW
+		width = cfg[0].Width
 		height = int(float64(width) / srcRatio)
 	} else {
-		height = tH
+		height = cfg[0].Height
 		width = int(float64(height) * srcRatio)
 	}
 
 	// 计算目标图片的起始位置
-	x := (tW - width) / 2
-	y := (tH - height) / 2
+	x := (cfg[0].Width - width) / 2
+	y := (cfg[0].Height - height) / 2
 
 	// 使用nearest-neighbor算法缩放图像
 	resizedImg := image.NewRGBA(image.Rect(0, 0, width, height))
 	draw.CatmullRom.Scale(resizedImg, resizedImg.Bounds(), srcImg, srcImg.Bounds(), draw.Over, nil)
 
 	// 将缩放后的图像绘制到目标图片上
-	img := image.NewRGBA(image.Rect(0, 0, tW, tH))
+	img := image.NewRGBA(image.Rect(0, 0, cfg[0].Width, cfg[0].Height))
 	draw.Draw(img, image.Rect(x, y, x+width, y+height), resizedImg, image.Point{0, 0}, draw.Src)
 	return img
 }

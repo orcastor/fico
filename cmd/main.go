@@ -24,16 +24,19 @@ func main() {
 	// path := `C:\Windows\System32\cmd.exe`
 	// path := `C:\Windows\System32\alg.exe`
 	// path := `C:\Windows\System32\imageres.dll`
-	// path := `C:\Windows\SystemResources\imageres.dll.mun`
+	path := `C:\Windows\SystemResources\imageres.dll.mun`
 	// path := `D:\Program Files (x86)\Adobe Illustrator CS4\Support Files\Contents\Windows\Illustrator.exe`
 	// path := `app.icns`
 	// path := `FileZilla.icns`
 	// path := `F:\安装包\android-studio-ide-401-201.6858069-mac.dmg`
-	path := `E:\Download\ETax.exe`
-	err = fico.F2ICO(w, path, fico.Config{Width: 48, Height: 48})
+	// path := `E:\Download\ETax.exe`
+	// path := `E:\Download\weixin6.2.5.apk`
+	// err = fico.F2ICO(w, path, fico.Config{Width: 48, Height: 48})
 	// err = fico.F2ICO(w, path, fico.Config{Format: "png"})
 	// err = fico.F2ICO(w, path, fico.Config{Format: "png", Width: 48, Height: 48})
 	// err = fico.F2ICO(w, path)
+	idx := -184
+	err = fico.F2ICO(w, path, fico.Config{Format: "png", Index: &idx, Width: 48, Height: 48})
 	if err != nil {
 		panic(err)
 	}
