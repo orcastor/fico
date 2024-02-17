@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf16"
+	"unsafe"
 
 	"gopkg.in/ini.v1"
 
@@ -667,18 +668,53 @@ type BITMAPINFOHEADER struct {
 	ColorsImportant uint32 // The number of important colors used
 }
 
-func Convert16BitToARGB(value uint16, mask uint32) color.Color {
+func trimTransparency(src *image.RGBA) *image.RGBA {
+	minX, maxX, minY, maxY := src.Bounds().Dx(), 0, src.Bounds().Dy(), 0
+	for y := 0; y < src.Bounds().Dy(); y++ {
+		for x := 0; x < src.Bounds().Dx(); x++ {
+			if src.RGBAAt(x, y).A != 0 { // 如果不透明
+				if x < minX {
+					minX = x
+				}
+				if x > maxX {
+					maxX = x
+				}
+				if y < minY {
+					minY = y
+				}
+				if y > maxY {
+					maxY = y
+				}
+			}
+		}
+	}
+
+	r := image.Rect(maxX, maxY, minX, minY)
+	if src.Bounds() == r {
+		return src
+	}
+
+	img := image.NewRGBA(r)
+	for y := r.Min.Y; y <= r.Max.Y; y++ {
+		for x := r.Min.X; x <= r.Max.X; x++ {
+			clr := src.RGBAAt(x, y)
+			img.Set(x-r.Min.X, y-r.Min.Y, clr)
+		}
+	}
+	return img
+}
+
+func convert16BitToARGB(value uint16, mask uint32) color.Color {
 	r := uint32((value >> 7) & 0xF8)
 	g := uint32((value << 6) & 0xFC00)
 	b := uint32((uint32(value) << 19) & 0xF80000)
-	// Apply mask
 	r = (r * (mask >> 16 & 0xFF)) >> 8
 	g = (g * (mask >> 8 & 0xFF)) >> 8
 	b = (b * (mask & 0xFF)) >> 8
-	return color.RGBA{uint8(r), uint8(g), uint8(b), 0xFF}
+	return color.RGBA{uint8(r), uint8(g), uint8(b), uint8(mask >> 24)}
 }
 
-func GetMaskBit(data []byte, x, y, w, h int) uint32 {
+func getMaskBit(data []byte, x, y, w, h int) uint32 {
 	maskDataRowSize := (((w + 31) >> 5) * 4)
 	byteIndex := (maskDataRowSize * ((h - 1) - y)) + (x >> 3)
 	bitIndex := uint(0x07 - (x & 0x07))
@@ -689,7 +725,7 @@ func GetMaskBit(data []byte, x, y, w, h int) uint32 {
 	return 0
 }
 
-func GetColorMonochrome(xorData, andData []byte, x, y, w, h int, pal []color.Color) color.Color {
+func getColorMonochrome(xorData, andData []byte, x, y, w, h int, pal []color.Color) color.Color {
 	maskDataRowSize := (((w + 31) >> 5) * 4)
 	xorBit := (((xorData[(maskDataRowSize*((h-1)-y))+(x>>3)] >> (0x07 - (x & 0x07))) << 1) & 2)
 	andBit := ((andData[(maskDataRowSize*((h-1)-y))+(x>>3)]) >> (0x07 - (x & 0x07))) & 1
@@ -697,110 +733,71 @@ func GetColorMonochrome(xorData, andData []byte, x, y, w, h int, pal []color.Col
 	return pal[value]
 }
 
-func CreateBmp32bppFromIconResData(data []byte, depth, w, h, colors int) *image.RGBA {
+func bmp32FromResData(data []byte, depth, w, h, colors int) *image.RGBA {
 	bmp := image.NewRGBA(image.Rect(0, 0, w, h))
 
-	ignoreSize := 40
-	colorDataSize := ((((((w * depth) + 7) >> 3) + 3) &^ 3) * h)
+	bih := 40
+	clrSz := ((((((w * depth) + 7) >> 3) + 3) &^ 3) * h)
 
 	switch depth {
-	default:
-		return bmp
 	case 32:
-		src := data[ignoreSize:]
-		for yy := h - 1; yy >= 0; yy-- {
+		h = int(math.Min(float64(h), float64((len(data)-bih)/4/w)))
+		pixel := 0
+		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
-				if (yy*w*4)+(xx*4)+3 >= len(src) {
-					return bmp
-				}
-				b := src[(yy*w*4)+(xx*4)]
-				g := src[(yy*w*4)+(xx*4)+1]
-				r := src[(yy*w*4)+(xx*4)+2]
-				a := src[(yy*w*4)+(xx*4)+3]
-				bmp.Set(xx, yy, color.RGBA{R: r, G: g, B: b, A: a})
+				clr := color.RGBA{}
+				binary.Read(bytes.NewReader(data[bih+pixel*4:]), binary.LittleEndian, &clr)
+				bmp.Set(xx, yy, clr)
+				pixel++
 			}
 		}
 	case 24:
-		src := data[ignoreSize:]
-		bitmask := data[ignoreSize+colorDataSize:]
+		bitmask := data[bih+clrSz:]
 		pixel := 0
-		for yy := h - 1; yy >= 0; yy-- {
+		h = int(math.Min(float64(h), float64((len(data)-bih-clrSz)/3/w)))
+		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
-				if pixel >= len(src)/3 {
-					return bmp
-				}
-				r := src[pixel*3]
-				g := src[pixel*3+1]
-				b := src[pixel*3+2]
-				mask := GetMaskBit(bitmask, xx, yy, w, h)
-				r = r & uint8(mask>>16)
-				g = g & uint8(mask>>8)
-				b = b & uint8(mask)
-				bmp.Set(xx, yy, color.RGBA{r, g, b, 0xFF})
+				mask := getMaskBit(bitmask, xx, yy, w, h)
+				bmp.Set(xx, yy, color.RGBA{data[bih+pixel*3] & uint8(mask>>16), data[bih+pixel*3+1] & uint8(mask>>8), data[bih+pixel*3+2] & uint8(mask), uint8(mask >> 24)})
 				pixel++
 			}
 		}
 	case 16:
-		src := data[ignoreSize:]
-		bitmask := data[ignoreSize+colorDataSize:]
+		bitmask := data[bih+clrSz:]
 		pixel := 0
-		for yy := h - 1; yy >= 0; yy-- {
+		h = int(math.Min(float64(h), float64((len(data)-bih-clrSz)/2/w)))
+		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
-				if pixel >= len(src)/2 {
-					return bmp
-				}
-				bmp.Set(xx, yy, Convert16BitToARGB(binary.LittleEndian.Uint16(src[pixel*2:]), GetMaskBit(bitmask, xx, yy, w, h)))
+				bmp.Set(xx, yy, convert16BitToARGB(binary.LittleEndian.Uint16(data[bih+pixel*2:]), getMaskBit(bitmask, xx, yy, w, h)))
 				pixel++
 			}
 		}
 	case 8:
-		src := data[ignoreSize:]
 		pal := make([]color.Color, colors)
 		for i := 0; i < colors; i++ {
-			if (i*4)+3 >= len(src) {
-				return bmp
-			}
-			b := src[(i*4)+0]
-			g := src[(i*4)+1]
-			r := src[(i*4)+2]
-			a := src[(i*4)+3]
-			pal[i] = color.RGBA{R: r, G: g, B: b, A: a}
+			pal[i] = color.RGBA{R: data[bih+i*4+2], G: data[bih+i*4+1], B: data[bih+i*4], A: data[bih+i*4+3]}
 		}
 		pixel := 0
-		for yy := h - 1; yy >= 0; yy-- {
+		h = int(math.Min(float64(h), float64((len(data)-bih-colors*4)/w)))
+		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
-				if pixel >= len(src) {
-					return bmp
-				}
-				colorIndex := int(src[pixel])
+				colorIndex := int(data[bih])
 				if colorIndex < len(pal) {
 					bmp.Set(xx, yy, pal[colorIndex])
-				} else {
-					bmp.Set(xx, yy, color.RGBA{})
 				}
 				pixel++
 			}
 		}
 	case 4:
-		src := data[ignoreSize:]
 		pal := make([]color.Color, colors)
 		for i := 0; i < colors; i++ {
-			if (i*4)+3 >= len(src) {
-				return bmp
-			}
-			b := src[(i*4)+0]
-			g := src[(i*4)+1]
-			r := src[(i*4)+2]
-			a := src[(i*4)+3]
-			pal[i] = color.RGBA{R: r, G: g, B: b, A: a}
+			pal[i] = color.RGBA{R: data[bih+i*4+2], G: data[bih+i*4+1], B: data[bih+i*4], A: data[bih+i*4+3]}
 		}
 		pixel := 0
-		for yy := h - 1; yy >= 0; yy-- {
+		h = int(math.Min(float64(h), float64((len(data)-bih-colors*4)/(w>>1))))
+		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
-				if (yy*w/2)+xx/2 >= len(src) {
-					return bmp
-				}
-				colorIndex := int(src[(yy*w/2)+(xx/2)]) // 2 pixels per byte
+				colorIndex := int(data[bih+(yy*w/2)+(xx/2)]) // 2 pixels per byte
 				if xx%2 == 0 {
 					colorIndex >>= 4
 				} else {
@@ -808,43 +805,35 @@ func CreateBmp32bppFromIconResData(data []byte, depth, w, h, colors int) *image.
 				}
 				if colorIndex < len(pal) {
 					bmp.Set(xx, yy, pal[colorIndex])
-				} else {
-					bmp.Set(xx, yy, color.RGBA{})
 				}
 				pixel++
 			}
 		}
 	case 1:
-		src := data[ignoreSize:]
-		bitmaskXOR := data[ignoreSize+(colors*4):]
-		bitmaskAND := data[ignoreSize+(colors*4)+colorDataSize:]
-		retColors := make([]color.Color, 4)
-		for i := 0; i < 4; i++ {
-			if (i*4)+3 >= len(src) {
-				return bmp
-			}
-			b := src[(i*4)+0]
-			g := src[(i*4)+1]
-			r := src[(i*4)+2]
-			a := src[(i*4)+3]
-			retColors[i] = color.RGBA{R: r, G: g, B: b, A: a}
+		if colors > 2 {
+			colors = 2
 		}
-		for yy := h - 1; yy >= 0; yy-- {
+		if colors <= 0 {
+			colors = 2
+		}
+		pal := *(*[]uint32)(unsafe.Pointer(&data[bih]))
+		bitmaskXOR := data[bih+(colors<<2):]
+		bitmaskAND := data[bih+(colors<<2)+clrSz:]
+		retColors := []color.Color{
+			color.RGBA{uint8(pal[0]), uint8(pal[0] >> 8), uint8(pal[0] >> 16), 0xFF},
+			color.RGBA{0x00, 0xFF, 0x00, 0xFF},
+			color.RGBA{uint8(pal[1]), uint8(pal[1] >> 8), uint8(pal[1] >> 16), 0xFF},
+			color.RGBA{0x00, 0x00, 0xFF, 0xFF},
+		}
+		h = int(math.Min(float64(h), float64((len(data)-bih-(colors<<2)-clrSz)/(w>>3))))
+		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
-				xorIndex := (yy*w + xx) / 8
-				andIndex := (yy*w + xx) / 8
-				if xorIndex >= len(bitmaskXOR) || andIndex >= len(bitmaskAND) {
-					return bmp
-				}
-				xorBit := ((bitmaskXOR[xorIndex] >> (7 - (uint(xx) % 8))) & 0x01) << 1
-				andBit := ((bitmaskAND[andIndex] >> (7 - (uint(xx) % 8))) & 0x01)
-				value := xorBit | andBit
-				bmp.Set(xx, yy, retColors[value])
+				bmp.Set(xx, yy, getColorMonochrome(bitmaskXOR, bitmaskAND, xx, yy, w, h, retColors))
 			}
 		}
 	}
 
-	return bmp
+	return trimTransparency(bmp)
 }
 
 func abs(x int) int {
@@ -880,17 +869,22 @@ func writeICO(w io.Writer, id ICONDIR, entries []ICONDIRENTRY, data [][]byte, cf
 			return IMG2ICO(w, bytes.NewReader(data[m]), cfg...)
 		} else {
 			var bih BITMAPINFOHEADER
-
 			err := binary.Read(bytes.NewReader(data[m]), binary.LittleEndian, &bih)
 			if err != nil {
 				return err
 			}
 
-			nbmp := image.NewRGBA(image.Rect(0, 0, int(bih.Width), int(bih.Height)))
-			draw.Draw(nbmp, nbmp.Bounds(), CreateBmp32bppFromIconResData(data[m], bm, int(bih.Width), int(bih.Height), int(bih.ColorsUsed)), image.Point{0, 0}, draw.Src)
+			bmp := bmp32FromResData(data[m], bm, int(bih.Width), int(bih.Height), int(bih.ColorsUsed))
+
+			var rgba *image.RGBA
+			if cfg[0].Width != bmp.Bounds().Dx() || cfg[0].Height != bmp.Bounds().Dy() {
+				rgba = zoomImg(bmp, cfg[0].Width, cfg[0].Height)
+			} else {
+				rgba = bmp
+			}
 
 			var buf bytes.Buffer
-			png.Encode(&buf, nbmp)
+			png.Encode(&buf, rgba)
 			return IMG2ICO(w, bytes.NewReader(buf.Bytes()), cfg...)
 		}
 	}
