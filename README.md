@@ -36,6 +36,7 @@
 - [x] 修复：低于256宽度图标格式转换为PNG的支持（先转换为32位位图）（参考：[获取exe *.ico文件中所有size的图片](https://stackoverflow.com/questions/16330403/get-hbitmaps-for-all-sizes-and-depths-of-a-file-type-icon-c)）
 - [x] 修复：获取准确的高度（BITMAPINFOHEADER中2倍高度掩码数据）
 - [x] 修复：裁剪掉透明边缘（48x48的位图，实际只有32x32是不透明的）
+- [x] 修复：默认图标获取其中的一个尺寸
 
 ### 如果要更新assets下的默认图标
 

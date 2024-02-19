@@ -391,12 +391,7 @@ func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 						} else {
 							alpha = 0xFF
 						}
-						rgba.Set(x, y, color.RGBA{
-							R: icon.Data[no+hasA*pixles],
-							G: icon.Data[no+(1+hasA)*pixles],
-							B: icon.Data[no+(2+hasA)*pixles],
-							A: alpha,
-						})
+						rgba.Set(x, y, color.RGBA{icon.Data[no+hasA*pixles], icon.Data[no+(1+hasA)*pixles], icon.Data[no+(2+hasA)*pixles], alpha})
 					}
 				}
 			} else {
@@ -546,7 +541,7 @@ type ICONDIRENTRY struct {
 	Offset uint32 // 图像数据的偏移量
 }
 
-func defaultICO(w io.Writer, peFile *pe.File) error {
+func defaultICO(w io.Writer, peFile *pe.File, cfg ...Config) error {
 	n := ""
 	if peFile.FileHeader.Characteristics&pe.IMAGE_FILE_DLL > 0 {
 		n = "assets/DLL.ico"
@@ -569,8 +564,21 @@ func defaultICO(w io.Writer, peFile *pe.File) error {
 	}
 
 	d, _ := Asset(n)
-	_, err := w.Write(d)
-	return err
+
+	gid := GRPICONDIR{}
+	rd := bytes.NewReader(d)
+	binary.Read(rd, binary.LittleEndian, &gid.ICONDIR)
+	entries := make([]ICONDIRENTRY, gid.Count)
+	for i := uint16(0); i < gid.Count; i++ {
+		binary.Read(rd, binary.LittleEndian, &entries[i])
+	}
+
+	var data [][]byte
+	for i := uint16(0); i < gid.Count; i++ {
+		data = append(data, d[entries[i].Offset:])
+	}
+
+	return writeICO(w, gid.ICONDIR, entries, data, cfg...)
 }
 
 /*
@@ -586,7 +594,7 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 
 	rsrc := peFile.Section(SECTION_RESOURCES)
 	if rsrc == nil {
-		return defaultICO(w, peFile)
+		return defaultICO(w, peFile, cfg...)
 	}
 
 	// 解析资源表
@@ -611,7 +619,7 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 
 	// 如果没有图标
 	if len(grpIcons) <= 0 {
-		return defaultICO(w, peFile)
+		return defaultICO(w, peFile, cfg...)
 	}
 
 	// 获取指定的图标
@@ -622,7 +630,7 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 			if r, ok := idmap[uint16(-*cfg[0].Index)]; ok {
 				return res2ICO(w, r.Data, cfg...)
 			}
-			return defaultICO(w, peFile)
+			return defaultICO(w, peFile, cfg...)
 		}
 		if cfg[0].Index == nil || int(*cfg[0].Index) >= len(grpIcons) {
 			d = grpIcons[0].Data
@@ -642,7 +650,7 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 
 	// 如果没有图标
 	if gid.Count <= 0 {
-		return defaultICO(w, peFile)
+		return defaultICO(w, peFile, cfg...)
 	}
 
 	entries := make([]ICONDIRENTRY, gid.Count)

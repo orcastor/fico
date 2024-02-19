@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	f, err := os.OpenFile("fico_demo.png", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
+	f, err := os.OpenFile("fico_demo.ico", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
 	if err != nil {
 		panic(err)
 	}
@@ -23,14 +23,14 @@ func main() {
 	// path := `C:\Users\Administrator\Downloads\imdb-movies-and-tv.apk`
 	// path := `C:\Windows\System32\cmd.exe`
 	// path := `C:\Windows\System32\alg.exe`
-	// path := `C:\Windows\System32\imageres.dll`
+	path := `C:\Windows\System32\imageres.dll`
 	// path := `C:\Windows\SystemResources\imageres.dll.mun`
 	// path := `D:\Program Files (x86)\Adobe Illustrator CS4\Support Files\Contents\Windows\Illustrator.exe`
 	// path := `app.icns`
 	// path := `FileZilla.icns`
 	// path := `F:\安装包\android-studio-ide-401-201.6858069-mac.dmg`
 	// path := `E:\Download\ETax.exe`
-	path := `E:\Download\IE9-Windows7-x64-chs.exe`
+	// path := `E:\Download\IE9-Windows7-x64-chs.exe`
 	// path := `E:\Download\weixin6.2.5.apk`
 	// err = fico.F2ICO(w, path, fico.Config{Width: 48, Height: 48})
 	// err = fico.F2ICO(w, path, fico.Config{Format: "png"})
