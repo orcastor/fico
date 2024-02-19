@@ -10,7 +10,7 @@
 
 - 图片（bmp、gif、jpg、jpeg、jp2、jpeg2000、png、tiff）
 - 图标（![](https://raw.githubusercontent.com/drag-and-publish/operating-system-logos/master/src/16x16/WIN.png) ico、![](https://raw.githubusercontent.com/drag-and-publish/operating-system-logos/master/src/16x16/MAC.png) icns）
-- ![](https://raw.githubusercontent.com/drag-and-publish/operating-system-logos/master/src/16x16/WIN.png) Windows可执行文件（exe、dll、mui、mun）
+- ![](https://raw.githubusercontent.com/drag-and-publish/operating-system-logos/master/src/16x16/WIN.png) Windows可执行文件（exe、dll）、资源文件（mui、mun）
 - ![](https://raw.githubusercontent.com/drag-and-publish/operating-system-logos/master/src/16x16/LIN.png) Linux可执行文件（\*.desktop【\*.AppImage、\*.run】）
 - 📱 手机应用安装包（![](https://raw.githubusercontent.com/drag-and-publish/operating-system-logos/master/src/16x16/AND.png) apk包、![](https://raw.githubusercontent.com/drag-and-publish/operating-system-logos/master/src/16x16/IOS.png) ipa包）
 - ![](https://raw.githubusercontent.com/drag-and-publish/operating-system-logos/master/src/16x16/WIN.png) 文件夹图标（autorun.inf、desktop.ini）

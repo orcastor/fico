@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf16"
-	"unsafe"
 
 	"gopkg.in/ini.v1"
 
@@ -105,8 +104,8 @@ func F2ICO(w io.Writer, path string, cfg ...Config) error {
 
 type Info struct {
 	IconFile  string
-	IconIndex int
 	FilePath  string
+	IconIndex *int
 }
 
 func GetInfo(path string) (info Info, err error) {
@@ -196,14 +195,18 @@ func GetInfo(path string) (info Info, err error) {
 
 		info.IconFile = section.Key("IconFile").String()
 		if info.IconFile != "" {
-			info.IconIndex = section.Key("IconIndex").MustInt(0)
+			if idx, err := section.Key("IconIndex").Int(); err == nil {
+				info.IconIndex = &idx
+			}
 		} else {
 			iconResource := section.Key("IconResource").String()
 			s := strings.Split(iconResource, ",")
 			if len(s) >= 1 {
 				info.IconFile = s[0]
 				if len(s) >= 2 {
-					info.IconIndex, _ = strconv.Atoi(s[1])
+					if idx, err := strconv.Atoi(s[1]); err == nil {
+						info.IconIndex = &idx
+					}
 				}
 			}
 		}
@@ -273,22 +276,22 @@ func img2ICO(w io.Writer, img image.Image, cfg ...Config) (err error) {
 }
 
 // https://github.com/nyteshade/ByteRunLengthCoder/blob/main/ByteRunLengthCoder.swift
-func icnsBRLDecode(data []byte) (ret []byte) {
-	for i := 0; i < len(data); {
-		b := data[i]
+func icnsBRLDecode(d []byte) (ret []byte) {
+	for i := 0; i < len(d); {
+		b := d[i]
 		if b < 0x80 {
 			cnt := int(b) + 1
-			if i+cnt >= len(data) {
+			if i+cnt >= len(d) {
 				break
 			}
-			ret = append(ret, data[i+1:i+1+cnt]...)
+			ret = append(ret, d[i+1:i+1+cnt]...)
 			i += cnt + 1
 		} else {
 			cnt := int(b) - 0x80 + 3
-			if i+1 >= len(data) {
+			if i+1 >= len(d) {
 				break
 			}
-			tb := data[i+1]
+			tb := d[i+1]
 			s := make([]byte, cnt)
 			for i := range s {
 				s[i] = tb
@@ -300,12 +303,12 @@ func icnsBRLDecode(data []byte) (ret []byte) {
 	return
 }
 
-func isPNG(data []byte) bool {
-	return len(data) > 8 && string(data[:8]) == "\211PNG\r\n\032\n"
+func isPNG(d []byte) bool {
+	return len(d) > 8 && string(d[:8]) == "\211PNG\r\n\032\n"
 }
 
-func isARGB(data []byte) bool {
-	return len(data) > 4 && string(data[:4]) == "ARGB"
+func isARGB(d []byte) bool {
+	return len(d) > 4 && string(d[:4]) == "ARGB"
 }
 
 // https://en.wikipedia.org/wiki/Apple_Icon_Image_format
@@ -330,7 +333,7 @@ func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 		}
 	}
 
-	var data [][]byte
+	var d [][]byte
 	var entries []ICONDIRENTRY
 	offset := 6 + len(newSet)*16
 	for i, icon := range newSet {
@@ -344,7 +347,7 @@ func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 		var w, h, s int
 
 		if isPNG(icon.Data) {
-			data = append(data, icon.Data)
+			d = append(d, icon.Data)
 			img, err := png.DecodeConfig(bytes.NewReader(icon.Data))
 			if err != nil {
 				return err
@@ -406,7 +409,7 @@ func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 
 			var buf bytes.Buffer
 			png.Encode(&buf, rgba)
-			data = append(data, buf.Bytes())
+			d = append(d, buf.Bytes())
 
 			w, h, s = rgba.Bounds().Dx(), rgba.Bounds().Dy(), buf.Len()
 		}
@@ -425,7 +428,7 @@ func ICNS2ICO(w io.Writer, r io.Reader, cfg ...Config) error {
 		offset += s
 	}
 
-	return writeICO(w, ICONDIR{Type: 1, Count: uint16(len(iconSet))}, entries, data, cfg...)
+	return writeICO(w, ICONDIR{Type: 1, Count: uint16(len(iconSet))}, entries, d, cfg...)
 }
 
 const (
@@ -434,11 +437,11 @@ const (
 	RT_GROUP_ICON     = "14/"
 )
 
-// Resource holds the full name and data of a data entry in a resource directory structure.
+// resource holds the full name and data of a data entry in a resource directory structure.
 // The name represents all 3 parts of the tree, separated by /, <type>/<name>/<language> with
 // For example: "3/1/1033" for a resources with ID names, or "10/SOMERES/1033" for a named
 // resource in language 1033.
-type Resource struct {
+type resource struct {
 	Name string
 	Data []byte
 }
@@ -446,39 +449,29 @@ type Resource struct {
 // Recursively parses a IMAGE_RESOURCE_DIRECTORY in slice b starting at position p
 // building on path prefix. virtual is needed to calculate the position of the data
 // in the resource
-func parseDir(b []byte, p int, prefix string, virtual uint32) []*Resource {
-	if prefix != "" && !strings.HasPrefix(prefix, RT_GROUP_ICON) && !strings.HasPrefix(prefix, RT_ICON) {
+func parseDir(b []byte, p int, prefix string, addr uint32) []*resource {
+	if prefix != "" && !strings.HasPrefix(prefix, RT_ICON) && !strings.HasPrefix(prefix, RT_GROUP_ICON) {
 		return nil
 	}
 
-	var resources []*Resource
+	le := binary.LittleEndian
 
+	var res []*resource
 	// Skip Characteristics, Timestamp, Major, Minor in the directory
-
-	numberOfNamedEntries := int(binary.LittleEndian.Uint16(b[p+12 : p+14]))
-	numberOfIdEntries := int(binary.LittleEndian.Uint16(b[p+14 : p+16]))
-	n := numberOfNamedEntries + numberOfIdEntries
+	n := int(le.Uint16(b[p+12:p+14])) + int(le.Uint16(b[p+14:p+16]))
 
 	// Iterate over all entries in the current directory record
 	for i := 0; i < n; i++ {
 		o := 8*i + p + 16
-		name := int(binary.LittleEndian.Uint32(b[o : o+4]))
-		offsetToData := int(binary.LittleEndian.Uint32(b[o+4 : o+8]))
+		name := int(le.Uint32(b[o : o+4]))
+		offsetToData := int(le.Uint32(b[o+4 : o+8]))
 		path := prefix
 		if name&0x80000000 > 0 { // Named entry if the high bit is set in the name
-			dirString := name & 0x7FFFFFFF
-			length := int(binary.LittleEndian.Uint16(b[dirString : dirString+2]))
-			c := b[dirString+2 : dirString+2+length*2]
-			var r []uint16
-			for {
-				if len(c) < 2 {
-					break
-				}
-				v := binary.LittleEndian.Uint16(c[0:2])
-				r = append(r, v)
-				c = c[2:]
-			}
-			path += string(utf16.Decode(r))
+			dirStr := name & 0x7FFFFFFF
+			length := int(le.Uint16(b[dirStr : dirStr+2]))
+			var resID []uint16
+			binary.Read(bytes.NewReader(b[dirStr+2:dirStr+2+length*2]), le, resID)
+			path += string(utf16.Decode(resID))
 		} else { // ID entry
 			path += strconv.Itoa(name)
 		}
@@ -486,25 +479,24 @@ func parseDir(b []byte, p int, prefix string, virtual uint32) []*Resource {
 		if offsetToData&0x80000000 > 0 { // Ptr to other directory if high bit is set
 			subdir := offsetToData & 0x7FFFFFFF
 
-			// Recursively get the resources from the sub dirs
-			l := parseDir(b, subdir, path+"/", virtual)
-			resources = append(resources, l...)
+			// Recursively get the res from the sub dirs
+			l := parseDir(b, subdir, path+"/", addr)
+			res = append(res, l...)
 			continue
 		}
 
 		// Leaf, ptr to the data entry. Read IMAGE_RESOURCE_DATA_ENTRY
-		offset := int(binary.LittleEndian.Uint32(b[offsetToData : offsetToData+4]))
-		length := int(binary.LittleEndian.Uint32(b[offsetToData+4 : offsetToData+8]))
+		offset := int(le.Uint32(b[offsetToData : offsetToData+4]))
+		length := int(le.Uint32(b[offsetToData+4 : offsetToData+8]))
 
 		// The offset in IMAGE_RESOURCE_DATA_ENTRY is relative to the virual address.
 		// Calculate the address in the file
-		offset -= int(virtual)
-		data := b[offset : offset+length]
+		offset -= int(addr)
 
-		// Add Resource to the list
-		resources = append(resources, &Resource{Name: path, Data: data})
+		// Add resource to the list
+		res = append(res, &resource{Name: path, Data: b[offset : offset+length]})
 	}
-	return resources
+	return res
 }
 
 // https://www.cnblogs.com/cswuyg/p/3603707.html
@@ -543,7 +535,7 @@ type ICONDIRENTRY struct {
 
 func defaultICO(w io.Writer, peFile *pe.File, cfg ...Config) error {
 	n := ""
-	if peFile.FileHeader.Characteristics&pe.IMAGE_FILE_DLL > 0 {
+	if peFile.FileHeader.Characteristics&pe.IMAGE_FILE_DLL != 0 {
 		n = "assets/DLL.ico"
 	} else {
 		// 如果没有资源段
@@ -563,26 +555,28 @@ func defaultICO(w io.Writer, peFile *pe.File, cfg ...Config) error {
 		}
 	}
 
-	d, _ := Asset(n)
+	iconData, _ := Asset(n)
 
 	gid := GRPICONDIR{}
-	rd := bytes.NewReader(d)
+	rd := bytes.NewReader(iconData)
 	binary.Read(rd, binary.LittleEndian, &gid.ICONDIR)
 	entries := make([]ICONDIRENTRY, gid.Count)
 	for i := uint16(0); i < gid.Count; i++ {
 		binary.Read(rd, binary.LittleEndian, &entries[i])
 	}
 
-	var data [][]byte
+	var d [][]byte
 	for i := uint16(0); i < gid.Count; i++ {
-		data = append(data, d[entries[i].Offset:])
+		d = append(d, iconData[entries[i].Offset:])
 	}
 
-	return writeICO(w, gid.ICONDIR, entries, data, cfg...)
+	return writeICO(w, gid.ICONDIR, entries, d, cfg...)
 }
 
 /*
-在 Windows 中，当匹配一个 EXE 文件的图标时，通常会选择其中的一个资源，这个资源通常是包含在 PE 文件中的一组图标资源中的一个。选择的资源不一定是具有最小 ID 的资源，而是根据一些规则进行选择。
+在 Windows 中，当匹配一个 EXE 文件的图标时，通常会选择其中的一个资源，
+这个资源通常是包含在 PE 文件中的一组图标资源中的一个。
+选择的资源不一定是具有最小 ID 的资源，而是根据一些规则进行选择。
 Choosing an Icon: https://learn.microsoft.com/en-us/previous-versions/ms997538(v=msdn.10)?redirectedfrom=MSDN#choosing-an-icon
 */
 func PE2ICO(w io.Writer, path string, cfg ...Config) error {
@@ -604,9 +598,9 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 	}
 
 	resources := parseDir(resTable, 0, "", rsrc.SectionHeader.VirtualAddress)
-	idmap := make(map[uint16]*Resource)
+	idmap := make(map[uint16]*resource)
 	gid := GRPICONDIR{}
-	var grpIcons []*Resource
+	var grpIcons []*resource
 	for _, r := range resources {
 		if strings.HasPrefix(r.Name, RT_GROUP_ICON) {
 			grpIcons = append(grpIcons, r)
@@ -623,7 +617,7 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 	}
 
 	// 获取指定的图标
-	var d []byte
+	var grpData []byte
 	if len(cfg) > 0 {
 		if cfg[0].Index != nil && *cfg[0].Index < 0 {
 			// 如果是负数，那么尝试id
@@ -633,15 +627,15 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 			return defaultICO(w, peFile, cfg...)
 		}
 		if cfg[0].Index == nil || int(*cfg[0].Index) >= len(grpIcons) {
-			d = grpIcons[0].Data
+			grpData = grpIcons[0].Data
 		} else {
-			d = grpIcons[*cfg[0].Index].Data
+			grpData = grpIcons[*cfg[0].Index].Data
 		}
 	} else {
-		d = grpIcons[0].Data
+		grpData = grpIcons[0].Data
 	}
 
-	rd := bytes.NewReader(d)
+	rd := bytes.NewReader(grpData)
 	binary.Read(rd, binary.LittleEndian, &gid.ICONDIR)
 	gid.Entries = make([]RESDIR, gid.Count)
 	for i := uint16(0); i < gid.Count; i++ {
@@ -654,7 +648,7 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 	}
 
 	entries := make([]ICONDIRENTRY, gid.Count)
-	var data [][]byte
+	var d [][]byte
 	offset := binary.Size(gid.ICONDIR) + len(entries)*binary.Size(entries[0])
 	for i := uint16(0); i < gid.Count; i++ {
 		if r, ok := idmap[gid.Entries[i].ID]; ok {
@@ -662,156 +656,150 @@ func PE2ICO(w io.Writer, path string, cfg ...Config) error {
 			entries[i].Offset = uint32(offset)
 
 			offset += len(r.Data)
-			data = append(data, r.Data)
+			d = append(d, r.Data)
 		}
 	}
 
-	return writeICO(w, gid.ICONDIR, entries, data, cfg...)
+	return writeICO(w, gid.ICONDIR, entries, d, cfg...)
 }
 
-type BITMAPINFOHEADER struct {
-	Size            uint32 // The size of the header (in bytes)
-	Width           int32  // The bitmap's width (in pixels)
-	Height          int32  // The bitmap's height (in pixels)
-	Planes          uint16 // The number of color planes (must be 1)
-	BitCount        uint16 // The number of bits per pixel
-	Compression     uint32 // The compression method being used
-	SizeImage       uint32 // The image size (in bytes)
-	XPelsPerMeter   int32  // The horizontal resolution (pixels per meter)
-	YPelsPerMeter   int32  // The vertical resolution (pixels per meter)
-	ColorsUsed      uint32 // The number of colors in the color palette
-	ColorsImportant uint32 // The number of important colors used
+// check 1bit FLAG of x,y coordinator
+func f(d []byte, x, y, w, h int) byte {
+	return d[(w>>3*((h-1)-y))+(x>>3)] >> uint(0x07-(x&0x07)) & 1
 }
 
-func convert16BitToARGB(value uint16, mask uint32) color.Color {
-	r := uint32((value >> 7) & 0xF8)
-	g := uint32((value << 6) & 0xFC00)
-	b := uint32((uint32(value) << 19) & 0xF80000)
-	r = (r * (mask >> 16 & 0xFF)) >> 8
-	g = (g * (mask >> 8 & 0xFF)) >> 8
-	b = (b * (mask & 0xFF)) >> 8
-	return color.RGBA{uint8(r), uint8(g), uint8(b), uint8(mask >> 24)}
+func convert16BitToARGB(value uint16, mask uint32) color.RGBA {
+	return color.RGBA{
+		uint8((uint32(value>>8&0xF8) * (mask >> 16)) >> 8),
+		uint8((uint32(value>>3&0xFC) * (mask >> 8)) >> 8),
+		uint8((uint32(value<<3&0xF8) * mask) >> 8),
+		uint8(mask >> 24),
+	}
 }
 
-func getMaskBit(data []byte, x, y, w, h int) uint32 {
-	if data != nil {
-		maskDataRowSize := (((w + 31) >> 5) * 4)
-		byteIndex := (maskDataRowSize * ((h - 1) - y)) + (x >> 3)
-		bitIndex := uint(0x07 - (x & 0x07))
-		bit := ((data[byteIndex] >> bitIndex) & 1)
-		if bit != 0 {
-			return 0
-		}
+func getMaskBit(d []byte, x, y, w, h int) uint32 {
+	if d != nil && f(d, x, y, w, h) != 0 {
+		return 0
 	}
 	return 0xFFFFFFFF
 }
 
-func getColorMonochrome(xorData, andData []byte, x, y, w, h int, pal []color.Color) color.Color {
-	maskDataRowSize := (((w + 31) >> 5) * 4)
-	xorBit := (((xorData[(maskDataRowSize*((h-1)-y))+(x>>3)] >> (0x07 - (x & 0x07))) << 1) & 2)
-	andBit := ((andData[(maskDataRowSize*((h-1)-y))+(x>>3)]) >> (0x07 - (x & 0x07))) & 1
-	value := xorBit | andBit
-	return pal[value]
-}
-
 // https://stackoverflow.com/questions/16330403/get-hbitmaps-for-all-sizes-and-depths-of-a-file-type-icon-c
-func bmp32FromResData(data []byte, depth, w, h, colors int) *image.RGBA {
+func res2BMP32(d []byte) *image.RGBA {
+	var bmpHdr struct {
+		Size            uint32 // The size of the header (in bytes)
+		Width           int32  // The bitmap's width (in pixels)
+		Height          int32  // The bitmap's height (in pixels)
+		Planes          uint16 // The number of color planes (must be 1)
+		BitCount        uint16 // The number of bits per pixel
+		Compression     uint32 // The compression method being used
+		SizeImage       uint32 // The image size (in bytes)
+		XPelsPerMeter   int32  // The horizontal resolution (pixels per meter)
+		YPelsPerMeter   int32  // The vertical resolution (pixels per meter)
+		ColorsUsed      uint32 // The number of colors in the color palette
+		ColorsImportant uint32 // The number of important colors used
+	}
+	binary.Read(bytes.NewReader(d), binary.LittleEndian, &bmpHdr)
+	w, h, colors := int(bmpHdr.Width), int(bmpHdr.Height), int(bmpHdr.ColorsUsed)
 	bmp := image.NewRGBA(image.Rect(0, 0, w, w))
 
-	bih := 40
-	var bitmask []byte
+	d = d[40:]
 
-	switch depth {
+	var bitmask []byte
+	switch bmpHdr.BitCount {
 	case 32: // BGRA
 		if h == w*2 {
-			bitmask = data[bih+w*w*4:]
+			bitmask = d[w*w*4:]
 			h = w
 		}
 		pixel := 0
 		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
 				mask := getMaskBit(bitmask, xx, yy, w, h)
-				bmp.Set(xx, yy, color.RGBA{data[bih+pixel*4+2] & uint8(mask>>16), data[bih+pixel*4+1] & uint8(mask>>8), data[bih+pixel*4] & uint8(mask), data[bih+pixel*4+3] & uint8(mask>>24)})
+				bmp.Set(xx, yy, color.RGBA{
+					d[pixel*4+2] & uint8(mask>>16),
+					d[pixel*4+1] & uint8(mask>>8),
+					d[pixel*4] & uint8(mask),
+					d[pixel*4+3] & uint8(mask>>24),
+				})
 				pixel++
 			}
 		}
 	case 24: // BGR
-		bitmask = data[bih+w*w*3:]
 		if h == w*2 {
+			bitmask = d[w*w*3:]
 			h = w
 		}
 		pixel := 0
 		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
 				mask := getMaskBit(bitmask, xx, yy, w, h)
-				bmp.Set(xx, yy, color.RGBA{data[bih+pixel*3+2] & uint8(mask>>16), data[bih+pixel*3+1] & uint8(mask>>8), data[bih+pixel*3] & uint8(mask), uint8(mask >> 24)})
+				bmp.Set(xx, yy, color.RGBA{
+					d[pixel*3+2] & uint8(mask>>16),
+					d[pixel*3+1] & uint8(mask>>8),
+					d[pixel*3] & uint8(mask),
+					uint8(mask >> 24),
+				})
 				pixel++
 			}
 		}
 	case 16:
-		bitmask = data[bih+w*w*2:]
 		if h == w*2 {
+			bitmask = d[w*w*2:]
 			h = w
 		}
 		pixel := 0
 		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
-				bmp.Set(xx, yy, convert16BitToARGB(binary.LittleEndian.Uint16(data[bih+pixel*2:]), getMaskBit(bitmask, xx, yy, w, h)))
+				bmp.Set(xx, yy, convert16BitToARGB(
+					binary.LittleEndian.Uint16(d[pixel*2:]),
+					getMaskBit(bitmask, xx, yy, w, h)))
 				pixel++
 			}
 		}
 	case 8:
-		if colors > 256 {
-			colors = 256
-		}
-		if colors <= 0 {
+		if colors > 256 || colors <= 0 {
 			colors = 256
 		}
 		if h == w*2 {
-			bitmask = data[bih+(colors<<2)+(w*w):]
+			bitmask = d[(colors<<2)+(w*w):]
 			h = w
 		}
 		pal := make([]color.RGBA, colors)
 		for i := 0; i < colors; i++ {
-			pal[i] = color.RGBA{data[bih+i*4+2], data[bih+i*4+1], data[bih+i*4], data[bih+i*4+3]} // RGBQUAD BGRA
+			pal[i] = color.RGBA{d[i*4+2], d[i*4+1], d[i*4], d[i*4+3]} // RGBQUAD BGRA
 		}
 		pixel := 0
 		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
-				colorIndex := int(data[bih+(colors<<2)+pixel])
-				clr := pal[colorIndex]
-				clr.A = uint8(getMaskBit(bitmask, xx, yy, w, h))
-				bmp.Set(xx, yy, clr)
+				if getMaskBit(bitmask, xx, yy, w, h) != 0 {
+					bmp.Set(xx, yy, pal[d[(colors<<2)+pixel]])
+				}
 				pixel++
 			}
 		}
 	case 4:
-		if colors > 16 {
-			colors = 16
-		}
-		if colors <= 0 {
+		if colors > 16 || colors <= 0 {
 			colors = 16
 		}
 		if h == w*2 {
-			bitmask = data[bih+(colors<<2)+(w*w>>1):]
+			bitmask = d[(colors<<2)+(w*w>>1):]
 			h = w
 		}
 		pal := make([]color.RGBA, colors)
 		for i := 0; i < colors; i++ {
-			pal[i] = color.RGBA{data[bih+i*4+2], data[bih+i*4+1], data[bih+i*4], data[bih+i*4+3]} // RGBQUAD BGRA
+			pal[i] = color.RGBA{d[i*4+2], d[i*4+1], d[i*4], d[i*4+3]} // RGBQUAD BGRA
 		}
 		pixel := 0
 		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
-				colorIndex := 0
-				if pixel&1 > 0 {
-					colorIndex = int(data[bih+(colors<<2)+(pixel>>1)] >> 4)
-				} else {
-					colorIndex = int(data[bih+(colors<<2)+(pixel>>1)] & 0x0F)
+				if getMaskBit(bitmask, xx, yy, w, h) != 0 {
+					if pixel&1 > 0 {
+						bmp.Set(xx, yy, pal[d[(colors<<2)+(pixel>>1)]>>4])
+					} else {
+						bmp.Set(xx, yy, pal[d[(colors<<2)+(pixel>>1)]&0x0F])
+					}
 				}
-				clr := pal[colorIndex]
-				clr.A = uint8(getMaskBit(bitmask, xx, yy, w, h))
-				bmp.Set(xx, yy, clr)
 				pixel++
 			}
 		}
@@ -822,18 +810,15 @@ func bmp32FromResData(data []byte, depth, w, h, colors int) *image.RGBA {
 		if colors <= 0 {
 			colors = 2
 		}
-		pal := *(*[]uint32)(unsafe.Pointer(&data[bih]))
-		bitmaskXOR := data[bih+(colors<<2):]
-		bitmaskAND := data[bih+(colors<<2)+(w*w>>3):]
-		retColors := []color.Color{
-			color.RGBA{uint8(pal[0]), uint8(pal[0] >> 8), uint8(pal[0] >> 16), 0xFF},
-			color.RGBA{0x00, 0xFF, 0x00, 0xFF},
-			color.RGBA{uint8(pal[1]), uint8(pal[1] >> 8), uint8(pal[1] >> 16), 0xFF},
-			color.RGBA{0x00, 0x00, 0xFF, 0xFF},
+		pal := make([]color.RGBA, colors)
+		for i := 0; i < colors; i++ {
+			pal[i] = color.RGBA{d[i*4+2], d[i*4+1], d[i*4], 0xFF} // RGBQUAD BGRA (alpha can be ignored)
 		}
+		retColors := []color.RGBA{pal[0], {0x00, 0xFF, 0x00, 0xFF}, pal[1], {0x00, 0x00, 0xFF, 0xFF}}
+		xorBits, andBits := d[(colors<<2):], d[(colors<<2)+(w*w>>3):]
 		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
-				bmp.Set(xx, yy, getColorMonochrome(bitmaskXOR, bitmaskAND, xx, yy, w, h, retColors))
+				bmp.Set(xx, yy, retColors[f(xorBits, xx, yy, w, h)<<1|f(andBits, xx, yy, w, h)])
 			}
 		}
 	}
@@ -841,18 +826,12 @@ func bmp32FromResData(data []byte, depth, w, h, colors int) *image.RGBA {
 	return bmp
 }
 
-func res2ICO(w io.Writer, data []byte, cfg ...Config) error {
-	if isPNG(data) {
-		return IMG2ICO(w, bytes.NewReader(data), cfg...)
+func res2ICO(w io.Writer, d []byte, cfg ...Config) error {
+	if isPNG(d) {
+		return IMG2ICO(w, bytes.NewReader(d), cfg...)
 	}
 
-	var bih BITMAPINFOHEADER
-	err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &bih)
-	if err != nil {
-		return err
-	}
-
-	return img2ICO(w, zoomImg(bmp32FromResData(data, int(bih.BitCount), int(bih.Width), int(bih.Height), int(bih.ColorsUsed)), cfg...), cfg...)
+	return img2ICO(w, zoomImg(res2BMP32(d), cfg...), cfg...)
 }
 
 func abs(x int) int {
@@ -862,7 +841,7 @@ func abs(x int) int {
 	return x
 }
 
-func writeICO(w io.Writer, id ICONDIR, entries []ICONDIRENTRY, data [][]byte, cfg ...Config) error {
+func writeICO(w io.Writer, id ICONDIR, entries []ICONDIRENTRY, d [][]byte, cfg ...Config) error {
 	// 如果wh设置了，选择合适的单张图标
 	if len(cfg) > 0 && cfg[0].Width > 0 && cfg[0].Height > 0 {
 		var m, wdiff, hdiff, bm int
@@ -872,7 +851,7 @@ func writeICO(w io.Writer, id ICONDIR, entries []ICONDIRENTRY, data [][]byte, cf
 				bm = int(e.BitCount)
 				var ws, hs int
 				if e.Width <= 0 || e.Height <= 0 { // 超过大小的一定是PNG的
-					img, _, _ := image.DecodeConfig(bytes.NewReader(data[i]))
+					img, _, _ := image.DecodeConfig(bytes.NewReader(d[i]))
 					ws, hs = img.Width, img.Height
 				} else {
 					ws, hs = int(e.Width), int(e.Height)
@@ -884,7 +863,7 @@ func writeICO(w io.Writer, id ICONDIR, entries []ICONDIRENTRY, data [][]byte, cf
 			}
 		}
 
-		return res2ICO(w, data[m], cfg...)
+		return res2ICO(w, d[m], cfg...)
 	}
 
 	// 没有设置，或者不是png格式
@@ -901,7 +880,7 @@ func writeICO(w io.Writer, id ICONDIR, entries []ICONDIRENTRY, data [][]byte, cf
 			}
 		}
 
-		for _, d := range data {
+		for _, d := range d {
 			_, err = w.Write(d)
 			if err != nil {
 				return err
@@ -917,7 +896,7 @@ func writeICO(w io.Writer, id ICONDIR, entries []ICONDIRENTRY, data [][]byte, cf
 			bm = int(e.BitCount)
 			var ws, hs int
 			if e.Width <= 0 || e.Height <= 0 { // 超过大小的一定是PNG的
-				img, _, _ := image.DecodeConfig(bytes.NewReader(data[i]))
+				img, _, _ := image.DecodeConfig(bytes.NewReader(d[i]))
 				ws, hs = img.Width, img.Height
 			} else {
 				ws, hs = int(e.Width), int(e.Height)
@@ -929,15 +908,15 @@ func writeICO(w io.Writer, id ICONDIR, entries []ICONDIRENTRY, data [][]byte, cf
 		}
 	}
 
-	_, err := w.Write(data[m])
+	_, err := w.Write(d[m])
 	return err
 }
 
 func zoomImg(srcImg image.Image, cfg ...Config) *image.RGBA {
 	if len(cfg) > 0 && (cfg[0].Width == srcImg.Bounds().Dx() || cfg[0].Height == srcImg.Bounds().Dy()) {
-		switch srcImg.(type) {
+		switch srcImg := srcImg.(type) {
 		case (*image.RGBA):
-			return srcImg.(*image.RGBA)
+			return srcImg
 		default:
 			rgba := image.NewRGBA(srcImg.Bounds())
 			draw.Draw(rgba, rgba.Bounds(), srcImg, image.Point{0, 0}, draw.Src)
@@ -946,14 +925,11 @@ func zoomImg(srcImg image.Image, cfg ...Config) *image.RGBA {
 	}
 
 	// 计算目标图片的纵横比
-	srcWidth := srcImg.Bounds().Dx()
-	srcHeight := srcImg.Bounds().Dy()
-	srcRatio := float64(srcWidth) / float64(srcHeight)
-	targetRatio := float64(cfg[0].Width) / float64(cfg[0].Height)
+	srcRatio := float64(srcImg.Bounds().Dx()) / float64(srcImg.Bounds().Dy())
 
 	// 计算缩放后的宽度和高度
 	var width, height int
-	if srcRatio > targetRatio {
+	if srcRatio > float64(cfg[0].Width)/float64(cfg[0].Height) {
 		width = cfg[0].Width
 		height = int(float64(width) / srcRatio)
 	} else {
@@ -962,8 +938,8 @@ func zoomImg(srcImg image.Image, cfg ...Config) *image.RGBA {
 	}
 
 	// 计算目标图片的起始位置
-	x := (cfg[0].Width - width) / 2
-	y := (cfg[0].Height - height) / 2
+	x := (cfg[0].Width - width) >> 1
+	y := (cfg[0].Height - height) >> 1
 
 	// 使用nearest-neighbor算法缩放图像
 	resizedImg := image.NewRGBA(image.Rect(0, 0, width, height))
