@@ -767,7 +767,7 @@ func res2BMP32(d []byte) *image.RGBA {
 		}
 		pal := make([]color.RGBA, colors)
 		for i := 0; i < colors; i++ {
-			pal[i] = color.RGBA{d[i*4+2], d[i*4+1], d[i*4], d[i*4+3]} // RGBQUAD BGRA
+			pal[i] = color.RGBA{d[i*4+2], d[i*4+1], d[i*4], 0xFF} // RGBQUAD BGR
 		}
 		pixel := 0
 		for yy := h - 1; yy > 0; yy-- {
@@ -788,7 +788,7 @@ func res2BMP32(d []byte) *image.RGBA {
 		}
 		pal := make([]color.RGBA, colors)
 		for i := 0; i < colors; i++ {
-			pal[i] = color.RGBA{d[i*4+2], d[i*4+1], d[i*4], d[i*4+3]} // RGBQUAD BGRA
+			pal[i] = color.RGBA{d[i*4+2], d[i*4+1], d[i*4], 0xFF} // RGBQUAD BGR
 		}
 		pixel := 0
 		for yy := h - 1; yy > 0; yy-- {
@@ -812,7 +812,7 @@ func res2BMP32(d []byte) *image.RGBA {
 		}
 		pal := make([]color.RGBA, colors)
 		for i := 0; i < colors; i++ {
-			pal[i] = color.RGBA{d[i*4+2], d[i*4+1], d[i*4], 0xFF} // RGBQUAD BGRA (alpha can be ignored)
+			pal[i] = color.RGBA{d[i*4+2], d[i*4+1], d[i*4], 0xFF} // RGBQUAD BGR
 		}
 		retColors := []color.RGBA{pal[0], {0x00, 0xFF, 0x00, 0xFF}, pal[1], {0x00, 0x00, 0xFF, 0xFF}}
 		xorBits, andBits := d[(colors<<2):], d[(colors<<2)+(w*w>>3):]
