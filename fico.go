@@ -39,15 +39,15 @@ type Config struct {
 }
 
 func F2ICO(w io.Writer, path string, cfg ...Config) error {
-	ext := strings.ToLower(filepath.Ext(path))[1:]
+	ext := strings.ToLower(filepath.Ext(path))
 	switch ext {
 	// https://superuser.com/questions/1480268/icons-no-longer-in-imageres-dll-in-windows-10-1903-4kb-file
-	case "exe", "dll", "mui", "mun":
+	case ".exe", ".dll", ".mui", ".mun":
 		return PE2ICO(w, path, cfg...)
 	}
 
 	switch ext {
-	case "ico", "icns", "bmp", "gif", "jpg", "jpeg", "png", "tiff":
+	case ".ico", ".icns", ".bmp", ".gif", ".jpg", ".jpeg", ".png", ".tiff":
 		f, err := os.Open(path)
 		if err != nil {
 			return err
@@ -55,16 +55,16 @@ func F2ICO(w io.Writer, path string, cfg ...Config) error {
 		defer f.Close()
 
 		switch ext {
-		case "ico": // FIXME：如果只需要其中的一种尺寸
+		case ".ico": // FIXME：如果只需要其中的一种尺寸
 			_, err = io.Copy(w, f)
 			return err
-		case "icns":
+		case ".icns":
 			return ICNS2ICO(w, f, cfg...)
-		case "bmp", "gif", "jpg", "jpeg", "png", "tiff":
+		case ".bmp", ".gif", ".jpg", ".jpeg", ".png", ".tiff":
 			return IMG2ICO(w, f, cfg...)
 		}
 
-	case "apk":
+	case ".apk":
 		appInfo, err := apkparser.ParseApk(path)
 		if err != nil {
 			return err
@@ -72,7 +72,7 @@ func F2ICO(w io.Writer, path string, cfg ...Config) error {
 
 		return img2ICO(w, appInfo.Icon, cfg...)
 
-	case "ipa":
+	case ".ipa":
 		r, err := zip.OpenReader(path)
 		if err != nil {
 			return err
@@ -109,24 +109,24 @@ type Info struct {
 }
 
 func GetInfo(path string) (info Info, err error) {
-	ext := strings.ToLower(filepath.Ext(path))[1:]
+	ext := strings.ToLower(filepath.Ext(path))
 
 	var f *ini.File
 	switch ext {
-	case "inf", "ini", "desktop":
+	case ".inf", ".ini", ".desktop":
 		f, err = ini.Load(path)
 		if err != nil {
 			return info, err
 		}
 
 	// *.app目录
-	case "app":
+	case ".app":
 		/*
 		*.app/Contents/Resources/AppIcon.icns
 		 */
 		info.IconFile = filepath.Join(path, "Contents/Resources/AppIcon.icns")
 		return
-	case "exe", "dll", "mui", "mun", "ico", "bmp", "gif", "jpg", "jpeg", "png", "tiff", "icns", "dmg", "ipa", "apk":
+	case ".exe", ".dll", ".mui", ".mun", ".ico", ".bmp", ".gif", ".jpg", ".jpeg", ".png", ".tiff", ".icns", ".dmg", ".ipa", ".apk":
 		// 尝试把iconfile设置为自己
 		info.IconFile = path
 		return
@@ -138,7 +138,7 @@ func GetInfo(path string) (info Info, err error) {
 	switch ext {
 	// 配置文件
 	// autorun.inf、desktop.ini、*.desktop(*.AppImage/*.run)
-	case "inf":
+	case ".inf":
 		/*
 			在 Windows 系统中，autorun.inf 文件用于自定义 CD、DVD 或 USB 驱动器上的自动运行功能。您可以在 autorun.inf 文件中定义要显示的图标。以下是如何定义图标的方法：
 
@@ -172,7 +172,7 @@ func GetInfo(path string) (info Info, err error) {
 		}
 
 		info.IconFile = section.Key("IconFile").MustString(section.Key("DefaultIcon").String())
-	case "ini":
+	case ".ini":
 		/*
 			在 Windows 操作系统中，desktop.ini 文件用于自定义文件夹的外观和行为。您可以在文件夹中创建 desktop.ini 文件，并在其中指定如何显示该文件夹的图标。
 
@@ -210,7 +210,7 @@ func GetInfo(path string) (info Info, err error) {
 				}
 			}
 		}
-	case "desktop":
+	case ".desktop":
 		/*
 			创建包含图标和其他资源的 .desktop 文件来为 .AppImage/.run 文件指定图标。然后，您可以将 .AppImage/.run 文件与 .desktop 文件一起分发，并通过 .desktop 文件来启动 .AppImage/.run 文件，并在系统中显示指定的图标。
 
