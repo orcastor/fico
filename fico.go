@@ -470,7 +470,7 @@ func parseDir(b []byte, p int, prefix string, addr uint32) []*resource {
 			dirStr := name & 0x7FFFFFFF
 			length := int(le.Uint16(b[dirStr : dirStr+2]))
 			var resID []uint16
-			binary.Read(bytes.NewReader(b[dirStr+2:dirStr+2+length*2]), le, resID)
+			binary.Read(bytes.NewReader(b[dirStr+2:dirStr+2+length<<1]), le, resID)
 			path += string(utf16.Decode(resID))
 		} else { // ID entry
 			path += strconv.Itoa(name)
@@ -701,34 +701,39 @@ func res2BMP32(d []byte) *image.RGBA {
 	}
 	binary.Read(bytes.NewReader(d), binary.LittleEndian, &bmpHdr)
 	w, h, colors := int(bmpHdr.Width), int(bmpHdr.Height), int(bmpHdr.ColorsUsed)
-	bmp := image.NewRGBA(image.Rect(0, 0, w, w))
+	var bmp *image.RGBA
+	if h >= w<<1 {
+		bmp = image.NewRGBA(image.Rect(0, 0, w, h>>1))
+	} else {
+		bmp = image.NewRGBA(image.Rect(0, 0, w, h))
+	}
 
 	d = d[40:]
 
 	var bitmask []byte
 	switch bmpHdr.BitCount {
 	case 32: // BGRA
-		if h == w*2 {
-			bitmask = d[w*w*4:]
-			h = w
+		if h >= w<<1 {
+			bitmask = d[w*w<<2:]
+			h >>= 1
 		}
 		pixel := 0
 		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
 				mask := getMaskBit(bitmask, xx, yy, w, h)
 				bmp.Set(xx, yy, color.RGBA{
-					d[pixel*4+2] & uint8(mask>>16),
-					d[pixel*4+1] & uint8(mask>>8),
-					d[pixel*4] & uint8(mask),
-					d[pixel*4+3] & uint8(mask>>24),
+					d[pixel<<2+2] & uint8(mask>>16),
+					d[pixel<<2+1] & uint8(mask>>8),
+					d[pixel<<2] & uint8(mask),
+					d[pixel<<2+3] & uint8(mask>>24),
 				})
 				pixel++
 			}
 		}
 	case 24: // BGR
-		if h == w*2 {
+		if h == w<<1 {
 			bitmask = d[w*w*3:]
-			h = w
+			h >>= 1
 		}
 		pixel := 0
 		for yy := h - 1; yy > 0; yy-- {
@@ -744,15 +749,15 @@ func res2BMP32(d []byte) *image.RGBA {
 			}
 		}
 	case 16:
-		if h == w*2 {
-			bitmask = d[w*w*2:]
-			h = w
+		if h == w<<1 {
+			bitmask = d[w*w<<1:]
+			h >>= 1
 		}
 		pixel := 0
 		for yy := h - 1; yy > 0; yy-- {
 			for xx := 0; xx < w; xx++ {
 				bmp.Set(xx, yy, convert16BitToARGB(
-					binary.LittleEndian.Uint16(d[pixel*2:]),
+					binary.LittleEndian.Uint16(d[pixel<<1:]),
 					getMaskBit(bitmask, xx, yy, w, h)))
 				pixel++
 			}
@@ -761,13 +766,13 @@ func res2BMP32(d []byte) *image.RGBA {
 		if colors > 256 || colors <= 0 {
 			colors = 256
 		}
-		if h == w*2 {
+		if h == w<<1 {
 			bitmask = d[(colors<<2)+(w*w):]
-			h = w
+			h >>= 1
 		}
 		pal := make([]color.RGBA, colors)
 		for i := 0; i < colors; i++ {
-			pal[i] = color.RGBA{d[i*4+2], d[i*4+1], d[i*4], 0xFF} // RGBQUAD BGR
+			pal[i] = color.RGBA{d[i<<2+2], d[i<<2+1], d[i<<2], 0xFF} // RGBQUAD BGR
 		}
 		pixel := 0
 		for yy := h - 1; yy > 0; yy-- {
@@ -782,13 +787,13 @@ func res2BMP32(d []byte) *image.RGBA {
 		if colors > 16 || colors <= 0 {
 			colors = 16
 		}
-		if h == w*2 {
+		if h == w<<1 {
 			bitmask = d[(colors<<2)+(w*w>>1):]
-			h = w
+			h >>= 1
 		}
 		pal := make([]color.RGBA, colors)
 		for i := 0; i < colors; i++ {
-			pal[i] = color.RGBA{d[i*4+2], d[i*4+1], d[i*4], 0xFF} // RGBQUAD BGR
+			pal[i] = color.RGBA{d[i<<2+2], d[i<<2+1], d[i<<2], 0xFF} // RGBQUAD BGR
 		}
 		pixel := 0
 		for yy := h - 1; yy > 0; yy-- {
@@ -812,7 +817,7 @@ func res2BMP32(d []byte) *image.RGBA {
 		}
 		pal := make([]color.RGBA, colors)
 		for i := 0; i < colors; i++ {
-			pal[i] = color.RGBA{d[i*4+2], d[i*4+1], d[i*4], 0xFF} // RGBQUAD BGR
+			pal[i] = color.RGBA{d[i<<2+2], d[i<<2+1], d[i<<2], 0xFF} // RGBQUAD BGR
 		}
 		retColors := []color.RGBA{pal[0], {0x00, 0xFF, 0x00, 0xFF}, pal[1], {0x00, 0x00, 0xFF, 0xFF}}
 		xorBits, andBits := d[(colors<<2):], d[(colors<<2)+(w*w>>3):]
