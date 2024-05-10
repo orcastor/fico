@@ -678,7 +678,7 @@ func convert16BitToARGB(value uint16, mask uint32) color.RGBA {
 }
 
 func getMaskBit(d []byte, x, y, w, h int) uint32 {
-	if d != nil && f(d, x, y, w, h) != 0 {
+	if len(d) > 0 && f(d, x, y, w, h) != 0 {
 		return 0
 	}
 	return 0xFFFFFFFF
