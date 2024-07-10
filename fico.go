@@ -469,7 +469,7 @@ func parseDir(b []byte, p int, prefix string, addr uint32) []*resource {
 		if name&0x80000000 > 0 { // Named entry if the high bit is set in the name
 			dirStr := name & 0x7FFFFFFF
 			length := int(le.Uint16(b[dirStr : dirStr+2]))
-			var resID []uint16
+			resID := make([]uint16, length)
 			binary.Read(bytes.NewReader(b[dirStr+2:dirStr+2+length<<1]), le, resID)
 			path += string(utf16.Decode(resID))
 		} else { // ID entry
@@ -492,6 +492,11 @@ func parseDir(b []byte, p int, prefix string, addr uint32) []*resource {
 		// The offset in IMAGE_RESOURCE_DATA_ENTRY is relative to the virual address.
 		// Calculate the address in the file
 		offset -= int(addr)
+
+		// Add boundary checks to prevent panic
+		if offset < 0 || offset+length > len(b) {
+			continue
+		}
 
 		// Add resource to the list
 		res = append(res, &resource{Name: path, Data: b[offset : offset+length]})
