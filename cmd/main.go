@@ -22,7 +22,7 @@ var (
 
 func main() {
     // Parse command-line arguments
-    flag.StringVar(&inputPath, "input", "", "Path to the input file")
+    flag.StringVar(&inputPath, "input", "", "Path to the input file / directory")
     flag.StringVar(&outputPath, "output", "", "Path to the output file (optional)")
     flag.StringVar(&format, "format", "png", "Output format")
     flag.IntVar(&width, "width", 32, "Image width")
@@ -38,13 +38,6 @@ func main() {
         os.Exit(1)
     }
 
-    // Check if the index flag was set
-    flag.Visit(func(f *flag.Flag) {
-        if f.Name == "index" {
-            indexSet = true
-        }
-    })
-
     // Derive output path if not provided
     if outputPath == "" {
         baseName := strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))
@@ -58,6 +51,26 @@ func main() {
         os.Exit(1)
     }
     defer outputFile.Close()
+    
+     // Get information from GetInfo function
+    info, err := fico.GetInfo(inputPath)
+    if err != nil {
+        fmt.Printf("Error getting info: %v\n", err)
+        os.Exit(1)
+    }
+
+    // Use retrieved information
+    if info.IconIndex != nil {
+        index = *info.IconIndex
+        indexSet = true
+    }
+
+    // Check if the index flag was set
+    flag.Visit(func(f *flag.Flag) {
+        if f.Name == "index" {
+            indexSet = true
+        }
+    })
 
     // Prepare configuration
     var indexPtr *int
