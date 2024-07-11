@@ -1,46 +1,83 @@
 package main
 
 import (
-	"bufio"
-	"os"
+    "flag"
+    "fmt"
+    "os"
+    "path/filepath"
+    "strings"
 
-	"github.com/orcastor/fico"
+    "github.com/orcastor/fico"
+)
+
+var (
+    inputPath  string
+    outputPath string
+    format     string
+    width      int
+    height     int
+    index      int
+    indexSet   bool
 )
 
 func main() {
-	f, err := os.OpenFile("fico_demo.png", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
-	if err != nil {
-		panic(err)
-	}
+    // Parse command-line arguments
+    flag.StringVar(&inputPath, "input", "", "Path to the input file")
+    flag.StringVar(&outputPath, "output", "", "Path to the output file (optional)")
+    flag.StringVar(&format, "format", "png", "Output format")
+    flag.IntVar(&width, "width", 32, "Image width")
+    flag.IntVar(&height, "height", 32, "Image height")
+    flag.IntVar(&index, "index", 0, "Image index (optional)")
 
-	defer f.Close()
+    flag.Parse()
 
-	w := bufio.NewWriter(f)
-	defer w.Flush()
+    // Check if required arguments are provided
+    if inputPath == "" {
+        fmt.Println("The input parameter is required")
+        flag.Usage()
+        os.Exit(1)
+    }
 
-	// path := `C:\Program Files\JetBrains\GoLand 2023.3.2\bin\goland64.exe`
-	// path := `E:\prvw测试文档\QQ拼音截图20240208232818.jpg`
-	// path := `C:\Users\Administrator\Downloads\imdb-movies-and-tv.apk`
-	// path := `C:\Windows\System32\cmd.exe`
-	// path := `C:\Windows\System32\alg.exe`
-	// path := `C:\Windows\System32\imageres.dll`
-	// path := `C:\Windows\SystemResources\imageres.dll.mun`
-	// path := `D:\Program Files (x86)\Adobe Illustrator CS4\Support Files\Contents\Windows\Illustrator.exe`
-	// path := `app.icns`
-	// path := `FileZilla.icns`
-	// path := `F:\安装包\android-studio-ide-401-201.6858069-mac.dmg`
-	// path := `E:\Download\ETax.exe`
-	// path := `E:\Download\IE9-Windows7-x64-chs.exe`
-	path := `E:\Download\lenovo_mouse_suite.exe`
-	// path := `E:\Download\weixin6.2.5.apk`
-	// err = fico.F2ICO(w, path, fico.Config{Width: 48, Height: 48})
-	// err = fico.F2ICO(w, path, fico.Config{Format: "png"})
-	// err = fico.F2ICO(w, path, fico.Config{Format: "png", Width: 48, Height: 48})
-	err = fico.F2ICO(w, path, fico.Config{Format: "png", Width: 32, Height: 32})
-	// idx := -184
-	// err = fico.F2ICO(w, path, fico.Config{Format: "png", Index: &idx, WiWidth: 32, Height: 32})
-	// err = fico.F2ICO(w, path)
-	if err != nil {
-		panic(err)
-	}
+    // Check if the index flag was set
+    flag.Visit(func(f *flag.Flag) {
+        if f.Name == "index" {
+            indexSet = true
+        }
+    })
+
+    // Derive output path if not provided
+    if outputPath == "" {
+        baseName := strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))
+        outputPath = baseName + "." + format
+    }
+
+    // Create output file
+    outputFile, err := os.Create(outputPath)
+    if err != nil {
+        fmt.Printf("Failed to create output file: %v\n", err)
+        os.Exit(1)
+    }
+    defer outputFile.Close()
+
+    // Prepare configuration
+    var indexPtr *int
+    if indexSet {
+        indexPtr = &index
+    }
+    config := fico.Config{
+        Format: format,
+        Index:  indexPtr,
+        Width:  width,
+        Height: height,
+    }
+
+    // Call fico.F2ICO function
+    err = fico.F2ICO(outputFile, inputPath, config)
+    if err != nil {
+        fmt.Printf("Error converting icon: %v\n", err)
+        os.Exit(1)
+    }
+
+    fmt.Printf("%s -> %s\n", inputPath, outputPath)
+    fmt.Println("Icon conversion successful")
 }
