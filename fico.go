@@ -104,7 +104,6 @@ func F2ICO(w io.Writer, path string, cfg ...Config) error {
 
 type Info struct {
 	IconFile  string
-	FilePath  string
 	IconIndex *int
 }
 
@@ -232,7 +231,9 @@ func GetInfo(path string) (info Info, err error) {
 		}
 
 		info.IconFile = section.Key("Icon").String()
-		info.FilePath = section.Key("Exec").String()
+		if info.IconFile == "" {
+			info.IconFile = section.Key("Exec").String()
+		}
 	}
 	return
 }
