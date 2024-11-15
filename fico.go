@@ -471,7 +471,7 @@ func parseDir(b []byte, p int, prefix string, addr uint32) []*resource {
 			dirLen := name & 0x7FFFFFFF
 			length := int(le.Uint16(b[dirLen : dirLen+2]))
 			resID := make([]uint16, length)
-			binary.Read(bytes.NewReader(b[dirStr+2:dirStr+2+length<<1]), le, resID)
+			binary.Read(bytes.NewReader(b[dirLen+2:dirLen+2+length<<1]), le, resID)
 			path += string(utf16.Decode(resID))
 		} else { // ID entry
 			path += strconv.Itoa(name)
