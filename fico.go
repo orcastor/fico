@@ -464,22 +464,22 @@ func parseDir(b []byte, p int, prefix string, addr uint32) []*resource {
 	// Iterate over all entries in the current directory record
 	for i := 0; i < n; i++ {
 		o := 8*i + p + 16
-		name := int(le.Uint32(b[o : o+4]))
-		offsetToData := int(le.Uint32(b[o+4 : o+8]))
+		name := le.Uint32(b[o : o+4])
+		offsetToData := le.Uint32(b[o+4 : o+8])
 		path := prefix
-		if name < 0 { // Named entry if the high bit is set in the name
-			dirLen := name & 0x7FFFFFFF
-			length := int(le.Uint16(b[dirLen : dirLen+2]))
+		if name&0x80000000 > 0 { // Named entry if the high bit is set in the name
+			dirStr := int(name & 0x7FFFFFFF)
+			length := int(le.Uint16(b[dirStr : dirStr+2]))
 			resID := make([]uint16, length)
-			binary.Read(bytes.NewReader(b[dirLen+2:dirLen+2+length<<1]), le, resID)
+			binary.Read(bytes.NewReader(b[dirStr+2:dirStr+2+length<<1]), le, resID)
 			path += string(utf16.Decode(resID))
 		} else { // ID entry
-			path += strconv.Itoa(name)
+			path += strconv.Itoa(int(name))
 		}
 
-		if offsetToData < 0 { // Ptr to other directory if high bit is set
+		if offsetToData&0x80000000 > 0 { // Ptr to other directory if high bit is set
 			// Recursively get the res from the sub dirs
-			l := parseDir(b, offsetToData & 0x7FFFFFFF, path+"/", addr)
+			l := parseDir(b, int(offsetToData&0x7FFFFFFF), path+"/", addr)
 			res = append(res, l...)
 			continue
 		}
